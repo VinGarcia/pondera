@@ -24,34 +24,62 @@ const (
 	Cost
 )
 
+// MarshalText renders the direction as its TOML keyword ("benefit"/"cost") so a
+// saved decision reads in words, not an opaque enum integer.
+func (dir Direction) MarshalText() ([]byte, error) {
+	switch dir {
+	case Benefit:
+		return []byte("benefit"), nil
+	case Cost:
+		return []byte("cost"), nil
+	default:
+		return nil, fmt.Errorf("pondera: unknown direction %d", int(dir))
+	}
+}
+
+// UnmarshalText parses a direction keyword, rejecting anything but the two
+// known words so a typo in a hand-edited file fails loudly instead of silently
+// defaulting to benefit.
+func (dir *Direction) UnmarshalText(text []byte) error {
+	switch string(text) {
+	case "benefit":
+		*dir = Benefit
+	case "cost":
+		*dir = Cost
+	default:
+		return fmt.Errorf("pondera: unknown direction %q", text)
+	}
+	return nil
+}
+
 // Criterion is one weighted value the decision is scored against.
 type Criterion struct {
-	Name      string
-	Weight    float64 // must be > 0
-	Direction Direction
+	Name      string    `toml:"name"`
+	Weight    float64   `toml:"weight"` // must be > 0
+	Direction Direction `toml:"direction"`
 	// Absolute switches the scoring mode. When false (default), the option's
 	// score is a bounded 0-100 measure of the attribute. When true, the score
 	// is a raw scalar that is min-max normalized across the options before
 	// weighting.
-	Absolute bool
+	Absolute bool `toml:"absolute,omitempty"`
 }
 
 // Option is one alternative being ranked; Scores maps criterion name to the
 // option's value for that criterion (a 0-100 quality-% or a raw scalar).
 type Option struct {
-	Name   string
-	Scores map[string]float64
+	Name   string             `toml:"name"`
+	Scores map[string]float64 `toml:"scores"`
 }
 
 // Decision is a single decider's weighted comparison of options.
 type Decision struct {
-	Title    string
-	Criteria []Criterion
-	Options  []Option
+	Title    string      `toml:"title"`
+	Criteria []Criterion `toml:"criteria"`
+	Options  []Option    `toml:"options"`
 	// LockedAt records when the criteria and weights were frozen. Its zero value
 	// means the decision is still open for criteria/weight edits and closed to
 	// options; see the builder methods in build.go for the ordering discipline.
-	LockedAt time.Time
+	LockedAt time.Time `toml:"locked_at,omitempty"`
 }
 
 // Result is one option's desirability index, in 0-100 (weights normalized).
