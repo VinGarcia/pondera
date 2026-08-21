@@ -9,6 +9,7 @@ package pondera
 import (
 	"fmt"
 	"sort"
+	"time"
 )
 
 // Direction says how a criterion's value maps to desirability. It applies to
@@ -47,6 +48,10 @@ type Decision struct {
 	Title    string
 	Criteria []Criterion
 	Options  []Option
+	// LockedAt records when the criteria and weights were frozen. Its zero value
+	// means the decision is still open for criteria/weight edits and closed to
+	// options; see the builder methods in build.go for the ordering discipline.
+	LockedAt time.Time
 }
 
 // Result is one option's desirability index, in 0-100 (weights normalized).
