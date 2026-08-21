@@ -14,9 +14,9 @@ func TestRank(t *testing.T) {
 		want     []Result // in expected order
 	}{
 		{
-			// Percent guideline: score is already "how good, 0-100"; direction
-			// is inert. Weighted index = (80*3 + 60*1.5) / 4.5 = 73.333...
-			name: "percent guideline weighted sum",
+			// Bounded benefit criteria: scores are 0-100 measures of the
+			// attribute. Weighted index = (80*3 + 60*1.5) / 4.5 = 73.333...
+			name: "bounded benefit weighted sum",
 			decision: Decision{
 				Title: "carro",
 				Criteria: []Criterion{
@@ -28,6 +28,26 @@ func TestRank(t *testing.T) {
 				},
 			},
 			want: []Result{{Option: "A", Score: 330.0 / 4.5}},
+		},
+		{
+			// Bounded cost: direction applies to bounded criteria too — a 0-100
+			// price-ness of 90 ("very expensive") contributes 100-90=10, so the
+			// cheaper option wins. Index barato = (70*2 + (100-20)*1)/3 = 73.33.
+			name: "bounded cost inverts direction",
+			decision: Decision{
+				Criteria: []Criterion{
+					{Name: "conforto", Weight: 2},
+					{Name: "preco", Weight: 1, Direction: Cost},
+				},
+				Options: []Option{
+					{Name: "caro", Scores: map[string]float64{"conforto": 80, "preco": 90}},
+					{Name: "barato", Scores: map[string]float64{"conforto": 70, "preco": 20}},
+				},
+			},
+			want: []Result{
+				{Option: "barato", Score: (70*2 + 80) / 3.0},
+				{Option: "caro", Score: (80*2 + 10) / 3.0},
+			},
 		},
 		{
 			// Absolute cost: raw prices min-max normalized, then inverted
@@ -96,9 +116,9 @@ func TestRank(t *testing.T) {
 			},
 		},
 		{
-			// Percent scores are clamped into 0-100 so a stray out-of-range
+			// Bounded scores are clamped into 0-100 so a stray out-of-range
 			// value cannot blow past the index bounds.
-			name: "percent score clamped",
+			name: "bounded score clamped",
 			decision: Decision{
 				Criteria: []Criterion{{Name: "x", Weight: 1}},
 				Options: []Option{

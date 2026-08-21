@@ -1,8 +1,9 @@
 // Package pondera scores decisions by weighted values: a single decider ranks
-// M options across K weighted criteria. Each criterion is either a
-// quality-percent guideline (score already means "how good, 0-100") or an
-// absolute scalar (raw value min-max normalized across the options, with the
-// criterion direction deciding whether higher is better or worse).
+// M options across K weighted criteria. Each criterion is either bounded
+// (score measures "how much of the attribute" on a 0-100 scale, so units can't
+// smuggle weight past the declared Weight) or absolute (raw scalar min-max
+// normalized across the options). The criterion direction decides whether more
+// of the attribute is better or worse, in both modes.
 package pondera
 
 import (
@@ -10,9 +11,9 @@ import (
 	"sort"
 )
 
-// Direction says how a criterion's raw value maps to desirability. It is only
-// consulted for absolute criteria; for percent-guideline criteria the score
-// already embeds the sense of "good", so direction is inert.
+// Direction says how a criterion's value maps to desirability. It applies to
+// every criterion: a bounded cost score of 90 ("90-much of a bad thing, e.g.
+// price") contributes 10.
 type Direction int
 
 const (
@@ -25,11 +26,12 @@ const (
 // Criterion is one weighted value the decision is scored against.
 type Criterion struct {
 	Name      string
-	Weight    float64   // must be > 0
-	Direction Direction // active only when Absolute is true
+	Weight    float64 // must be > 0
+	Direction Direction
 	// Absolute switches the scoring mode. When false (default), the option's
-	// score is a 0-100 quality percentage used as-is. When true, the score is a
-	// raw scalar that is min-max normalized across the options before weighting.
+	// score is a bounded 0-100 measure of the attribute. When true, the score
+	// is a raw scalar that is min-max normalized across the options before
+	// weighting.
 	Absolute bool
 }
 
@@ -133,8 +135,12 @@ func (d Decision) absoluteBounds() (map[string]span, error) {
 // contribution, applying the criterion's mode and direction.
 func contribution(c Criterion, v float64, s span) float64 {
 	if !c.Absolute {
-		// Percent guideline: the score already means "how good", used as-is.
-		return clamp(v, 0, 100)
+		// Bounded: the score is already on the 0-100 scale; only direction applies.
+		v = clamp(v, 0, 100)
+		if c.Direction == Cost {
+			v = 100 - v
+		}
+		return v
 	}
 	// Absolute: min-max normalize across the field. When every option ties,
 	// the criterion cannot discriminate, so it contributes neutrally (50)
