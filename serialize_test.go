@@ -9,7 +9,7 @@ import (
 )
 
 // sampleDecision is a locked decision exercising every field that must survive
-// serialization: bounded benefit, bounded cost, an absolute cost criterion,
+// serialization: bounded benefit, bounded cost, a min-max cost criterion,
 // multiple options with float scores, and a non-zero LockedAt stamp. The time
 // is a fixed UTC instant so the round-trip is deterministic (no monotonic clock
 // or local-zone artifacts from time.Now).
@@ -20,7 +20,7 @@ func sampleDecision() Decision {
 		Criteria: []Criterion{
 			{Name: "seguranca", Weight: 3, Direction: Benefit},
 			{Name: "preco", Weight: 1.5, Direction: Cost},
-			{Name: "km_rodados", Weight: 1.2, Direction: Cost, Absolute: true},
+			{Name: "km_rodados", Weight: 1.2, Direction: Cost, Normalization: MinMax},
 		},
 		Options: []Option{
 			{Name: "Modelo A", Scores: map[string]float64{"seguranca": 80, "preco": 60, "km_rodados": 40000}},

@@ -10,13 +10,22 @@ diff, and defend.
 
 ## Criteria
 
-Each criterion has a weight (relative, `> 0`) and two independent flags:
+Each criterion has a weight (relative, `> 0`) and two independent settings:
 
 - **direction** — `benefit` (higher is better, the default) or `--cost`
   (higher is worse; the value is inverted).
-- **scale** — *bounded* (the default): the value is a 0–100 quality score, used
-  as-is. Or `--absolute`: the value is a raw scalar (price, km, hours) and pondera
-  min-max normalizes it across the options before weighting.
+- **normalization** — how raw values become a 0–100 contribution. The variant
+  names spell out the anchors (what maps to 0 and what maps to 100):
+  - `bounded` (the default): the value is already a 0–100 quality score, used
+    as-is.
+  - `min-max`: the value is a raw scalar (price, km, hours) anchored to the
+    field — the smallest value across options maps to 0, the largest to 100.
+    Maximally discriminating, but it erases magnitude: two near-identical
+    values still land on 0 and 100.
+  - `zero-max`: a raw scalar anchored at zero — 0 maps to 0, the largest value
+    to 100 (`v/max·100`). Preserves ratios (near-identical values contribute
+    near-identically), so it requires a scale where zero means "none of the
+    attribute"; negative values are rejected.
 
 The final index is `Σ(weight × value) / Σ(weight)`, on a 0–100 scale.
 
@@ -31,7 +40,7 @@ $ pondera new --title "New car" car.toml
 
 $ pondera add-criterion --name safety --weight 3 car.toml
 $ pondera add-criterion --name comfort --weight 2 car.toml
-$ pondera add-criterion --name price --weight 1.5 --cost --absolute car.toml
+$ pondera add-criterion --name price --weight 1.5 --cost --normalization min-max car.toml
 $ pondera lock car.toml
 
 $ pondera add-option --name Corolla car.toml
@@ -50,7 +59,7 @@ New car
   criteria:
     - safety (weight 3, benefit, bounded)
     - comfort (weight 2, benefit, bounded)
-    - price (weight 1.5, cost, absolute)
+    - price (weight 1.5, cost, min-max)
   options:
     - Corolla
         safety = 90
@@ -68,7 +77,7 @@ Ranking for "New car":
 ```
 <!-- END VERIFIED EXAMPLE -->
 
-Civic wins even though the Corolla is safer: it is cheaper (an absolute cost
+Civic wins even though the Corolla is safer: it is cheaper (a min-max cost
 criterion, so R$120k beats R$130k) and more comfortable, and those outweigh the
 safety edge at these weights. Change a weight before `lock` and the ranking may
 flip — which is the point.
@@ -81,7 +90,7 @@ flip — which is the point.
 
 ```
 pondera new           --title T <file>                          create an open decision
-pondera add-criterion --name N [--weight W] [--cost] [--absolute] <file>
+pondera add-criterion --name N [--weight W] [--cost] [--normalization M] <file>
 pondera set-weight    --name N --weight W <file>                adjust a weight (pre-lock)
 pondera lock          <file>                                    freeze criteria & weights
 pondera add-option    --name N <file>                           add an alternative (post-lock)

@@ -1,9 +1,10 @@
 // Package pondera scores decisions by weighted values: a single decider ranks
 // M options across K weighted criteria. Each criterion is either bounded
 // (score measures "how much of the attribute" on a 0-100 scale, so units can't
-// smuggle weight past the declared Weight) or absolute (raw scalar min-max
-// normalized across the options). The criterion direction decides whether more
-// of the attribute is better or worse, in both modes.
+// smuggle weight past the declared Weight) or a raw scalar normalized across
+// the options — min-max (field-relative) or zero-max (ratio-preserving); see
+// Normalization. The criterion direction decides whether more of the attribute
+// is better or worse, in every mode.
 package pondera
 
 import (
@@ -52,16 +53,66 @@ func (dir *Direction) UnmarshalText(text []byte) error {
 	return nil
 }
 
+// Normalization says how a criterion's raw values become a 0-100 contribution.
+// The variant names spell out the anchors: what maps to 0 and what maps to 100.
+type Normalization int
+
+const (
+	// Bounded (the default) means the score is already a 0-100 measure of the
+	// attribute; it is clamped, never rescaled.
+	Bounded Normalization = iota
+	// MinMax means the score is a raw scalar anchored to the field: the
+	// smallest value across options maps to 0, the largest to 100. Maximally
+	// discriminating, but it erases magnitude — two near-identical values
+	// still land on 0 and 100.
+	MinMax
+	// ZeroMax means the score is a raw scalar anchored at zero: 0 maps to 0,
+	// the largest value across options to 100 (v/max·100). Preserves ratios —
+	// near-identical values contribute near-identically — so it requires a
+	// scale where zero means "none of the attribute" (price, km, tokens);
+	// negative values are rejected.
+	ZeroMax
+)
+
+// MarshalText renders the normalization as its TOML keyword so a saved
+// decision reads in words, not an opaque enum integer.
+func (n Normalization) MarshalText() ([]byte, error) {
+	switch n {
+	case Bounded:
+		return []byte("bounded"), nil
+	case MinMax:
+		return []byte("min-max"), nil
+	case ZeroMax:
+		return []byte("zero-max"), nil
+	default:
+		return nil, fmt.Errorf("pondera: unknown normalization %d", int(n))
+	}
+}
+
+// UnmarshalText parses a normalization keyword, rejecting anything but the
+// known words so a typo in a hand-edited file fails loudly instead of silently
+// defaulting to bounded.
+func (n *Normalization) UnmarshalText(text []byte) error {
+	switch string(text) {
+	case "bounded":
+		*n = Bounded
+	case "min-max":
+		*n = MinMax
+	case "zero-max":
+		*n = ZeroMax
+	default:
+		return fmt.Errorf("pondera: unknown normalization %q", text)
+	}
+	return nil
+}
+
 // Criterion is one weighted value the decision is scored against.
 type Criterion struct {
 	Name      string    `toml:"name"`
 	Weight    float64   `toml:"weight"` // must be > 0
 	Direction Direction `toml:"direction"`
-	// Absolute switches the scoring mode. When false (default), the option's
-	// score is a bounded 0-100 measure of the attribute. When true, the score
-	// is a raw scalar that is min-max normalized across the options before
-	// weighting.
-	Absolute bool `toml:"absolute,omitempty"`
+	// Normalization switches the scoring mode; absent in TOML means Bounded.
+	Normalization Normalization `toml:"normalization,omitempty"`
 }
 
 // Option is one alternative being ranked; Scores maps criterion name to the
@@ -105,7 +156,7 @@ func (d Decision) Rank() ([]Result, error) {
 		totalWeight += c.Weight
 	}
 
-	bounds, err := d.absoluteBounds()
+	bounds, err := d.normalizationSpans()
 	if err != nil {
 		return nil, err
 	}
@@ -129,15 +180,17 @@ func (d Decision) Rank() ([]Result, error) {
 	return results, nil
 }
 
-// span holds the min and max raw value of an absolute criterion across options.
+// span holds the min and max raw value of a normalized criterion across options.
 type span struct{ min, max float64 }
 
-// absoluteBounds precomputes the value range of every absolute criterion so a
-// single option's contribution can be normalized against the whole field.
-func (d Decision) absoluteBounds() (map[string]span, error) {
+// normalizationSpans precomputes the value range of every non-bounded
+// criterion so a single option's contribution can be normalized against the
+// whole field. It also rejects negative values on zero-max criteria: on a
+// zero-anchored scale a negative is bad data, not a valid case.
+func (d Decision) normalizationSpans() (map[string]span, error) {
 	bounds := make(map[string]span)
 	for _, c := range d.Criteria {
-		if !c.Absolute {
+		if c.Normalization == Bounded {
 			continue
 		}
 		var s span
@@ -146,6 +199,9 @@ func (d Decision) absoluteBounds() (map[string]span, error) {
 			v, ok := o.Scores[c.Name]
 			if !ok {
 				return nil, fmt.Errorf("pondera: option %q missing score for criterion %q", o.Name, c.Name)
+			}
+			if c.Normalization == ZeroMax && v < 0 {
+				return nil, fmt.Errorf("pondera: option %q has negative value %g on zero-max criterion %q", o.Name, v, c.Name)
 			}
 			if !seen {
 				s = span{min: v, max: v}
@@ -165,24 +221,28 @@ func (d Decision) absoluteBounds() (map[string]span, error) {
 }
 
 // contribution maps one option's value for a criterion to a 0-100 desirability
-// contribution, applying the criterion's mode and direction.
+// contribution, applying the criterion's normalization and direction.
 func contribution(c Criterion, v float64, s span) float64 {
-	if !c.Absolute {
-		// Bounded: the score is already on the 0-100 scale; only direction applies.
-		v = clamp(v, 0, 100)
-		if c.Direction == Cost {
-			v = 100 - v
-		}
-		return v
-	}
-	// Absolute: min-max normalize across the field. When every option ties,
-	// the criterion cannot discriminate, so it contributes neutrally (50)
-	// regardless of direction.
 	var norm float64
-	if s.max == s.min {
-		norm = 50
-	} else {
-		norm = (v - s.min) / (s.max - s.min) * 100
+	switch c.Normalization {
+	case MinMax:
+		// Anchors: field min → 0, field max → 100. When every option ties the
+		// criterion cannot discriminate, so it contributes neutrally (50).
+		if s.max == s.min {
+			norm = 50
+		} else {
+			norm = (v - s.min) / (s.max - s.min) * 100
+		}
+	case ZeroMax:
+		// Anchors: 0 → 0, field max → 100. All-zero fields tie, same neutral 50.
+		if s.max == 0 {
+			norm = 50
+		} else {
+			norm = v / s.max * 100
+		}
+	default:
+		// Bounded: the score is already on the 0-100 scale; clamp only.
+		norm = clamp(v, 0, 100)
 	}
 	if c.Direction == Cost {
 		norm = 100 - norm

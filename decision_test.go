@@ -50,13 +50,13 @@ func TestRank(t *testing.T) {
 			},
 		},
 		{
-			// Absolute cost: raw prices min-max normalized, then inverted
+			// Min-max cost: raw prices min-max normalized, then inverted
 			// because higher price is worse. Cheapest option (100k -> norm 0 ->
 			// cost 100) beats the priciest (200k -> norm 100 -> cost 0).
-			name: "absolute cost inverts direction",
+			name: "min-max cost inverts direction",
 			decision: Decision{
 				Criteria: []Criterion{
-					{Name: "preco", Weight: 1, Direction: Cost, Absolute: true},
+					{Name: "preco", Weight: 1, Direction: Cost, Normalization: MinMax},
 				},
 				Options: []Option{
 					{Name: "barato", Scores: map[string]float64{"preco": 100000}},
@@ -66,11 +66,11 @@ func TestRank(t *testing.T) {
 			want: []Result{{Option: "barato", Score: 100}, {Option: "caro", Score: 0}},
 		},
 		{
-			// Absolute benefit: higher raw value is better, no inversion.
-			name: "absolute benefit keeps direction",
+			// Min-max benefit: higher raw value is better, no inversion.
+			name: "min-max benefit keeps direction",
 			decision: Decision{
 				Criteria: []Criterion{
-					{Name: "autonomia", Weight: 1, Direction: Benefit, Absolute: true},
+					{Name: "autonomia", Weight: 1, Direction: Benefit, Normalization: MinMax},
 				},
 				Options: []Option{
 					{Name: "curta", Scores: map[string]float64{"autonomia": 300}},
@@ -80,12 +80,12 @@ func TestRank(t *testing.T) {
 			want: []Result{{Option: "longa", Score: 100}, {Option: "curta", Score: 0}},
 		},
 		{
-			// Absolute criterion where all options tie: cannot discriminate, so
+			// Min-max criterion where all options tie: cannot discriminate, so
 			// it contributes a neutral 50 to every option regardless of direction.
-			name: "absolute tie is neutral",
+			name: "min-max tie is neutral",
 			decision: Decision{
 				Criteria: []Criterion{
-					{Name: "preco", Weight: 1, Direction: Cost, Absolute: true},
+					{Name: "preco", Weight: 1, Direction: Cost, Normalization: MinMax},
 				},
 				Options: []Option{
 					{Name: "X", Scores: map[string]float64{"preco": 50000}},
@@ -95,13 +95,13 @@ func TestRank(t *testing.T) {
 			want: []Result{{Option: "X", Score: 50}, {Option: "Y", Score: 50}},
 		},
 		{
-			// Mixed percent + absolute, and the winner must sort first even
+			// Mixed percent + min-max, and the winner must sort first even
 			// though it is declared second.
 			name: "mixed criteria ranked descending",
 			decision: Decision{
 				Criteria: []Criterion{
 					{Name: "conforto", Weight: 2}, // percent
-					{Name: "preco", Weight: 1, Direction: Cost, Absolute: true},
+					{Name: "preco", Weight: 1, Direction: Cost, Normalization: MinMax},
 				},
 				Options: []Option{
 					// conforto 40; preco 100k -> cost 100. index=(40*2+100*1)/3=60
@@ -114,6 +114,54 @@ func TestRank(t *testing.T) {
 				{Option: "bom-barato", Score: (60*2 + 100) / 3.0},
 				{Option: "confortavel-caro", Score: (40*2 + 0) / 3.0},
 			},
+		},
+		{
+			// Zero-max preserves ratios: anchors are 0 -> 0 and field max -> 100,
+			// so 300 vs 600 contribute 50 vs 100 (min-max would give 0 vs 100).
+			name: "zero-max preserves magnitude",
+			decision: Decision{
+				Criteria: []Criterion{
+					{Name: "autonomia", Weight: 1, Direction: Benefit, Normalization: ZeroMax},
+				},
+				Options: []Option{
+					{Name: "curta", Scores: map[string]float64{"autonomia": 300}},
+					{Name: "longa", Scores: map[string]float64{"autonomia": 600}},
+				},
+			},
+			want: []Result{{Option: "longa", Score: 100}, {Option: "curta", Score: 50}},
+		},
+		{
+			// Zero-max cost: near-identical prices contribute near-identically —
+			// 100 vs 101 inverts to ~0.99 vs 0, not the min-max 100 vs 0.
+			name: "zero-max cost inverts direction",
+			decision: Decision{
+				Criteria: []Criterion{
+					{Name: "preco", Weight: 1, Direction: Cost, Normalization: ZeroMax},
+				},
+				Options: []Option{
+					{Name: "barato", Scores: map[string]float64{"preco": 100}},
+					{Name: "caro", Scores: map[string]float64{"preco": 101}},
+				},
+			},
+			want: []Result{
+				{Option: "barato", Score: 100 - 100.0/101.0*100},
+				{Option: "caro", Score: 0},
+			},
+		},
+		{
+			// Zero-max where every option is at zero: the field cannot
+			// discriminate, so it contributes the same neutral 50 as a min-max tie.
+			name: "zero-max all-zero is neutral",
+			decision: Decision{
+				Criteria: []Criterion{
+					{Name: "custo", Weight: 1, Direction: Cost, Normalization: ZeroMax},
+				},
+				Options: []Option{
+					{Name: "X", Scores: map[string]float64{"custo": 0}},
+					{Name: "Y", Scores: map[string]float64{"custo": 0}},
+				},
+			},
+			want: []Result{{Option: "X", Score: 50}, {Option: "Y", Score: 50}},
 		},
 		{
 			// Bounded scores are clamped into 0-100 so a stray out-of-range
@@ -175,9 +223,18 @@ func TestRankErrors(t *testing.T) {
 			},
 		},
 		{
-			name: "missing score on absolute criterion",
+			// A zero-anchored scale has no meaning for negatives: bad data, not
+			// a valid case.
+			name: "negative value on zero-max criterion",
 			decision: Decision{
-				Criteria: []Criterion{{Name: "x", Weight: 1, Absolute: true}},
+				Criteria: []Criterion{{Name: "x", Weight: 1, Normalization: ZeroMax}},
+				Options:  []Option{{Name: "A", Scores: map[string]float64{"x": -5}}},
+			},
+		},
+		{
+			name: "missing score on normalized criterion",
+			decision: Decision{
+				Criteria: []Criterion{{Name: "x", Weight: 1, Normalization: MinMax}},
 				Options: []Option{
 					{Name: "A", Scores: map[string]float64{"x": 10}},
 					{Name: "B", Scores: map[string]float64{}},

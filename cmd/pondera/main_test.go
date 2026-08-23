@@ -25,7 +25,7 @@ func TestFullFlow(t *testing.T) {
 
 	mustRun(t, &sink, "new", "--title", "New car", file)
 	mustRun(t, &sink, "add-criterion", "--name", "safety", "--weight", "3", file)
-	mustRun(t, &sink, "add-criterion", "--name", "price", "--weight", "2", "--cost", "--absolute", file)
+	mustRun(t, &sink, "add-criterion", "--name", "price", "--weight", "2", "--cost", "--normalization", "min-max", file)
 	mustRun(t, &sink, "lock", file)
 	mustRun(t, &sink, "add-option", "--name", "A", file)
 	mustRun(t, &sink, "add-option", "--name", "B", file)
@@ -34,7 +34,7 @@ func TestFullFlow(t *testing.T) {
 	mustRun(t, &sink, "score", "--option", "B", "--criterion", "safety", "--value", "70", file)
 	mustRun(t, &sink, "score", "--option", "B", "--criterion", "price", "--value", "20000", file)
 
-	// safety weight 3, price weight 2 (cost, absolute over {40000,20000}).
+	// safety weight 3, price weight 2 (cost, min-max over {40000,20000}).
 	// A: safety 90; price min-max -> 100, cost -> 0.  (90*3 + 0*2)/5 = 54
 	// B: safety 70; price -> 0, cost -> 100.          (70*3 + 100*2)/5 = 82
 	var out bytes.Buffer
@@ -90,6 +90,7 @@ func TestArgErrors(t *testing.T) {
 		{"set-weight", "--name", "x", file}, // missing --weight
 		{"score", "--option", "A", "--criterion", "x", file}, // missing --value
 		{"rank", "missing.toml"},                             // load nonexistent file
+		{"add-criterion", "--name", "z", "--normalization", "absolute", file}, // unknown normalization keyword
 	}
 	for _, args := range cases {
 		if err := run(args, &sink); err == nil {
