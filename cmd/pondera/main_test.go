@@ -88,8 +88,8 @@ func TestArgErrors(t *testing.T) {
 		{"new", file},                       // missing --title
 		{"lock"},                            // missing <file>
 		{"set-weight", "--name", "x", file}, // missing --weight
-		{"score", "--option", "A", "--criterion", "x", file}, // missing --value
-		{"rank", "missing.toml"},                             // load nonexistent file
+		{"score", "--option", "A", "--criterion", "x", file},                  // missing --value
+		{"rank", "missing.toml"},                                              // load nonexistent file
 		{"add-criterion", "--name", "z", "--normalization", "absolute", file}, // unknown normalization keyword
 	}
 	for _, args := range cases {
