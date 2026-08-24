@@ -1,11 +1,19 @@
 package pondera
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 )
+
+// ErrNotFound is returned by a Store's Load when no decision matches the given
+// (owner, title). The port defines its own not-found so callers (an HTTP layer,
+// say) can answer "not found" without knowing whether the backend is a
+// filesystem, a database, or anything else.
+var ErrNotFound = errors.New("pondera: decision not found")
 
 // A Store persists decisions scoped by owner. Save and Load address a decision
 // by its (Owner, Title) identity; List returns the titles a single owner owns,
@@ -91,13 +99,18 @@ func (s *FileStore) Save(d Decision) error {
 	return Save(p, d)
 }
 
-// Load reads back the decision owned by owner with the given title.
+// Load reads back the decision owned by owner with the given title, returning
+// ErrNotFound when no such file exists so callers need not match on fs errors.
 func (s *FileStore) Load(owner, title string) (Decision, error) {
 	p, err := s.path(owner, title)
 	if err != nil {
 		return Decision{}, err
 	}
-	return Load(p)
+	d, err := Load(p)
+	if errors.Is(err, fs.ErrNotExist) {
+		return Decision{}, fmt.Errorf("%w: %s owns no %q", ErrNotFound, owner, title)
+	}
+	return d, err
 }
 
 // List returns the titles of the decisions owned by owner, sorted by nothing in
