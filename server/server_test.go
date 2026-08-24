@@ -223,3 +223,29 @@ func TestCreateRejectsDuplicateTitle(t *testing.T) {
 		t.Fatalf("bob's same-title POST: status %d, want 201 (conflict must be owner-scoped)", r.Code)
 	}
 }
+
+// TestCreateRejectsUnusableTitle covers a title that is non-empty but has no
+// filename-safe characters (only punctuation): the store cannot slug it, so
+// what would otherwise surface as a 500 must be reported as a 400 — the caller
+// sent a bad title, not the server failing. The bad request must also persist
+// nothing, so a later well-formed title is unaffected.
+func TestCreateRejectsUnusableTitle(t *testing.T) {
+	store := pondera.NewFileStore(t.TempDir())
+	h := server.New(store, server.OwnerFromHeader("X-Pondera-Owner"))
+
+	// A punctuation-only title cannot become a path segment. It is the caller's
+	// fault, so it is a 400 — not a 500 leaking an internal slug error.
+	if r := post(h, "/decisions", "alice", bodyFor("!!!", "alice")); r.Code != http.StatusBadRequest {
+		t.Fatalf("unusable-title POST: status %d, want 400; body %q", r.Code, r.Body.String())
+	}
+
+	// The rejected write saved nothing: alice still owns no decisions.
+	rec := get(h, "/decisions", "alice")
+	var titles []string
+	if err := json.Unmarshal(rec.Body.Bytes(), &titles); err != nil {
+		t.Fatalf("listing alice after rejected POST: %v; body %q", err, rec.Body.String())
+	}
+	if len(titles) != 0 {
+		t.Fatalf("alice owns %v after a rejected POST, want none", titles)
+	}
+}

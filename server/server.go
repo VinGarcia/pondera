@@ -133,6 +133,9 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	if _, err := h.store.Load(d.Owner, d.Title); err == nil {
 		http.Error(w, "decision already exists", http.StatusConflict)
 		return
+	} else if errors.Is(err, pondera.ErrInvalidTitle) {
+		http.Error(w, "decision title has no usable characters", http.StatusBadRequest)
+		return
 	} else if !errors.Is(err, pondera.ErrNotFound) {
 		http.Error(w, "checking for existing decision", http.StatusInternalServerError)
 		return

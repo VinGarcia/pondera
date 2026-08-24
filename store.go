@@ -15,6 +15,13 @@ import (
 // filesystem, a database, or anything else.
 var ErrNotFound = errors.New("pondera: decision not found")
 
+// ErrInvalidTitle is returned by a Store when a title, though non-empty, has no
+// filename-safe characters (only punctuation) and so cannot address a decision.
+// Like ErrNotFound it is part of the port so a caller (an HTTP layer, say) can
+// map it to a client error — a 400 — without matching on the backend's own
+// error strings.
+var ErrInvalidTitle = errors.New("pondera: title has no filename-safe characters")
+
 // A Store persists decisions scoped by owner. Save and Load address a decision
 // by its (Owner, Title) identity; List returns the titles a single owner owns,
 // never leaking another owner's decisions. The interface keeps the persistence
@@ -81,7 +88,9 @@ func (s *FileStore) path(owner, title string) (string, error) {
 	}
 	titleSlug, err := slug(title)
 	if err != nil {
-		return "", err
+		// A punctuation-only title is the caller's mistake, not a backend fault;
+		// tag it with the port's sentinel so an HTTP layer can answer 400.
+		return "", fmt.Errorf("%w: %q", ErrInvalidTitle, title)
 	}
 	return filepath.Join(s.root, ownerSlug, titleSlug+".toml"), nil
 }
