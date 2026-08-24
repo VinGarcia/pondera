@@ -46,6 +46,7 @@ func New(store pondera.Store, ownerFn OwnerFunc) *Handler {
 	mux.HandleFunc("GET /decisions", h.list)
 	mux.HandleFunc("POST /decisions", h.create)
 	mux.HandleFunc("GET /decisions/{title}", h.get)
+	mux.HandleFunc("PUT /decisions/{title}", h.update)
 	mux.HandleFunc("GET /decisions/{title}/rank", h.rank)
 	h.mux = mux
 	return h
@@ -174,6 +175,49 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusCreated)
+	writeJSON(w, d)
+}
+
+// update serves PUT /decisions/{title}: it REPLACES an existing decision the
+// injected owner holds with the request body — the edit-and-re-rank loop. The
+// title in the path identifies the resource; the owner and title from the body
+// are ignored so a caller can neither reattribute the decision nor rename it
+// into a second one. Update is the explicit mirror of create: a title the owner
+// does not already hold is a 404 (it never creates), just as POST to an existing
+// title is a 409. A missing owner is a 401 and a malformed body is a 400.
+func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
+	owner, ok := h.owner(w, r)
+	if !ok {
+		return
+	}
+	title := r.PathValue("title")
+	// The decision must already exist for this owner; PUT edits, it does not
+	// create. The lookup is owner-scoped, so a title another owner holds reads as
+	// not-found here — bob cannot edit alice's decision, nor learn it exists.
+	if _, err := h.store.Load(owner, title); errors.Is(err, pondera.ErrNotFound) {
+		http.Error(w, "decision not found", http.StatusNotFound)
+		return
+	} else if errors.Is(err, pondera.ErrInvalidTitle) {
+		http.Error(w, "decision title has no usable characters", http.StatusBadRequest)
+		return
+	} else if err != nil {
+		http.Error(w, "loading decision", http.StatusInternalServerError)
+		return
+	}
+	var d pondera.Decision
+	if err := json.NewDecoder(r.Body).Decode(&d); err != nil {
+		http.Error(w, "invalid decision body", http.StatusBadRequest)
+		return
+	}
+	// Identity comes from the authenticated owner and the path, never the body:
+	// the resource being replaced is (owner, path title), so a body naming another
+	// owner or a different title cannot escape that scope.
+	d.Owner = owner
+	d.Title = title
+	if err := h.store.Save(d); err != nil {
+		http.Error(w, "saving decision", http.StatusInternalServerError)
+		return
+	}
 	writeJSON(w, d)
 }
 

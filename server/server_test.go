@@ -50,6 +50,18 @@ func post(h http.Handler, path, owner, body string) *httptest.ResponseRecorder {
 	return rec
 }
 
+// put issues a PUT to path with the given JSON body, setting the owner header
+// when owner is non-empty, and returns the response recorder.
+func put(h http.Handler, path, owner, body string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPut, path, strings.NewReader(body))
+	if owner != "" {
+		req.Header.Set("X-Pondera-Owner", owner)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
 // TestHandlerScopesToInjectedOwner is the fatia-3 behavior: a mountable handler
 // serves decisions from a Store scoped to the owner the host injects (here via
 // the request header), and that scoping is a real isolation boundary — an owner
@@ -331,5 +343,128 @@ func TestCreateRejectsUnusableTitle(t *testing.T) {
 	}
 	if len(titles) != 0 {
 		t.Fatalf("alice owns %v after a rejected POST, want none", titles)
+	}
+}
+
+// mustJSON marshals a decision to a JSON request body, panicking on the
+// impossible encode error so a test reads as a straight line.
+func mustJSON(d pondera.Decision) string {
+	b, err := json.Marshal(d)
+	if err != nil {
+		panic(err)
+	}
+	return string(b)
+}
+
+// TestUpdateEndpoint is the edit-and-re-rank loop — the central operation of a
+// decision tool. PUT /decisions/{title} REPLACES an existing decision owned by
+// the injected owner, so the decider can adjust a weight and the ranking
+// reflects it immediately from the single source of truth. Update is distinct
+// from create: PUT to a title the owner does not hold is a 404 (it never
+// creates), just as POST to one they do hold is a 409. It is owner-scoped, the
+// body's owner is ignored in favor of the injected one, and a malformed body is
+// a 400.
+func TestUpdateEndpoint(t *testing.T) {
+	store := pondera.NewFileStore(t.TempDir())
+	h := server.New(store, server.OwnerFromHeader("X-Pondera-Owner"))
+
+	// Alice's decision: with safety weighted far above price, the safe-but-pricey
+	// option wins.
+	initial := pondera.Decision{
+		Title: "buy-car",
+		Owner: "alice",
+		Criteria: []pondera.Criterion{
+			{Name: "safety", Weight: 3},
+			{Name: "price", Weight: 1, Direction: pondera.Cost},
+		},
+		Options: []pondera.Option{
+			{Name: "cheap", Scores: map[string]float64{"safety": 40, "price": 20}},
+			{Name: "safe", Scores: map[string]float64{"safety": 90, "price": 80}},
+		},
+	}
+	if err := store.Save(initial); err != nil {
+		t.Fatalf("seeding initial decision: %v", err)
+	}
+	if r := get(h, "/decisions/buy-car/rank", "alice"); r.Code == http.StatusOK {
+		var res []pondera.Result
+		_ = json.Unmarshal(r.Body.Bytes(), &res)
+		if res[0].Option != "safe" {
+			t.Fatalf("precondition: top option = %q, want safe before the edit", res[0].Option)
+		}
+	} else {
+		t.Fatalf("precondition rank: status %d, want 200", r.Code)
+	}
+
+	// The decider changes their mind: price now dominates safety. Same options,
+	// only the weights flip. The body claims bob owns it — the injected owner
+	// (alice) must still win.
+	edited := initial
+	edited.Owner = "bob"
+	edited.Criteria = []pondera.Criterion{
+		{Name: "safety", Weight: 1},
+		{Name: "price", Weight: 3, Direction: pondera.Cost},
+	}
+	if r := put(h, "/decisions/buy-car", "alice", mustJSON(edited)); r.Code != http.StatusOK {
+		t.Fatalf("PUT edit: status %d, want 200; body %q", r.Code, r.Body.String())
+	}
+
+	// The stored decision is still alice's (body owner ignored), and the ranking
+	// now reflects the new weights: the cheaper option wins. This is the whole
+	// value — the engine re-ranks from the updated source of truth, not a stale
+	// copy.
+	if got, err := store.Load("alice", "buy-car"); err != nil {
+		t.Fatalf("loading edited decision: %v", err)
+	} else if got.Owner != "alice" {
+		t.Fatalf("stored owner = %q, want alice (body owner must be ignored)", got.Owner)
+	}
+	if _, err := store.Load("bob", "buy-car"); err == nil {
+		t.Fatal("edit leaked to bob: body owner was trusted over the injected owner")
+	}
+	rec := get(h, "/decisions/buy-car/rank", "alice")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("rank after edit: status %d, want 200; body %q", rec.Code, rec.Body.String())
+	}
+	var res []pondera.Result
+	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
+		t.Fatalf("decoding rank after edit %q: %v", rec.Body.String(), err)
+	}
+	if res[0].Option != "cheap" {
+		t.Fatalf("top option after weight edit = %q, want cheap (re-ranked from the edit)", res[0].Option)
+	}
+
+	// PUT never creates: updating a title the owner does not hold is a 404, the
+	// mirror of POST's 409-on-existing. This keeps create and update explicit.
+	missing := pondera.Decision{Title: "no-such", Owner: "alice", Criteria: initial.Criteria, Options: initial.Options}
+	if r := put(h, "/decisions/no-such", "alice", mustJSON(missing)); r.Code != http.StatusNotFound {
+		t.Fatalf("PUT to missing decision: status %d, want 404 (update must not create)", r.Code)
+	}
+	if _, err := store.Load("alice", "no-such"); err == nil {
+		t.Fatal("PUT to a missing title created it: update must be explicit, not upsert")
+	}
+
+	// Owner-scoping: bob cannot edit alice's decision even knowing its title. It
+	// is a 404 (never confirming her decision exists) and her data is untouched.
+	bobEdit := initial
+	bobEdit.Options = []pondera.Option{
+		{Name: "cheap", Scores: map[string]float64{"safety": 1, "price": 1}},
+		{Name: "safe", Scores: map[string]float64{"safety": 1, "price": 1}},
+	}
+	if r := put(h, "/decisions/buy-car", "bob", mustJSON(bobEdit)); r.Code != http.StatusNotFound {
+		t.Fatalf("bob editing alice's decision: status %d, want 404", r.Code)
+	}
+	if got, err := store.Load("alice", "buy-car"); err != nil {
+		t.Fatalf("reloading alice's decision after bob's attempt: %v", err)
+	} else if got.Options[1].Scores["safety"] != 90 {
+		t.Fatalf("alice's decision was clobbered by bob's edit: safe safety = %v, want 90", got.Options[1].Scores["safety"])
+	}
+
+	// No injected owner: refused, nothing changes.
+	if r := put(h, "/decisions/buy-car", "", mustJSON(edited)); r.Code != http.StatusUnauthorized {
+		t.Fatalf("PUT with no owner: status %d, want 401", r.Code)
+	}
+
+	// Malformed JSON is a client error, not a 500 and not a silent no-op.
+	if r := put(h, "/decisions/buy-car", "alice", "{not json"); r.Code != http.StatusBadRequest {
+		t.Fatalf("PUT with malformed JSON: status %d, want 400", r.Code)
 	}
 }
