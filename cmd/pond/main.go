@@ -1,4 +1,4 @@
-// Command pondera is the CLI over the decision engine. It is the *disciplined*
+// Command pond is the CLI over the decision engine. It is the *disciplined*
 // path into the library: state lives one-decision-per-TOML-file, and every
 // subcommand loads that file, applies one builder method, and saves. Because the
 // builder methods enforce the ordering (criteria and weights first, Lock, then
@@ -7,14 +7,14 @@
 //
 // Usage:
 //
-//	pondera new          [flags] <file>   create an open decision
-//	pondera add-criterion[flags] <file>   declare a weighted value (pre-lock)
-//	pondera set-weight   [flags] <file>   adjust a criterion's weight (pre-lock)
-//	pondera lock                 <file>   freeze the criteria and weights
-//	pondera add-option   [flags] <file>   add an alternative (post-lock)
-//	pondera score        [flags] <file>   score one option on one criterion
-//	pondera rank                 <file>   compute and print the ranking
-//	pondera show                 <file>   print the decision's current state
+//	pond new          [flags] <file>   create an open decision
+//	pond add-criterion[flags] <file>   declare a weighted value (pre-lock)
+//	pond set-weight   [flags] <file>   adjust a criterion's weight (pre-lock)
+//	pond lock                 <file>   freeze the criteria and weights
+//	pond add-option   [flags] <file>   add an alternative (post-lock)
+//	pond score        [flags] <file>   score one option on one criterion
+//	pond rank                 <file>   compute and print the ranking
+//	pond show                 <file>   print the decision's current state
 package main
 
 import (
@@ -69,7 +69,7 @@ func run(args []string, out io.Writer) error {
 }
 
 func usage(out io.Writer) {
-	fmt.Fprint(out, `pondera — rank options by weighted values
+	fmt.Fprint(out, `pond — rank options by weighted values
 
 Commands:
   new           --title T <file>                       create an open decision

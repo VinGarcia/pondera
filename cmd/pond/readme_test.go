@@ -69,7 +69,7 @@ func normalize(s string) string {
 }
 
 // parseVerifiedExample extracts the fenced console block between the VERIFIED
-// EXAMPLE markers. Lines beginning "$ pondera " are commands; the lines that
+// EXAMPLE markers. Lines beginning "$ pond " are commands; the lines that
 // follow (until the next command) are that command's expected stdout, with
 // surrounding blank lines stripped so visual separators do not count as output.
 func parseVerifiedExample(t *testing.T, md string) []exampleCmd {
@@ -101,7 +101,7 @@ func parseVerifiedExample(t *testing.T, md string) []exampleCmd {
 		wantLines = nil
 	}
 	for _, line := range strings.Split(block, "\n") {
-		if s, ok := strings.CutPrefix(line, "$ pondera "); ok {
+		if s, ok := strings.CutPrefix(line, "$ pond "); ok {
 			flush()
 			cur = &exampleCmd{args: shellSplit(s)}
 			continue
