@@ -11,6 +11,7 @@ package pondera
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -132,6 +133,16 @@ func (r Range) anchors() (Anchor, Anchor) {
 	return r.lo, r.hi
 }
 
+// isIdentity reports whether the range is the default [0, 100] mapping, under
+// which a 0-100 value contributes itself unchanged. An allocation criterion
+// must map through this — its shares are already contributions — so an explicit
+// [0, 100] (as serialization always writes) is consistent while any other range
+// contradicts it.
+func (r Range) isIdentity() bool {
+	lo, hi := r.anchors()
+	return !lo.dynamic() && !hi.dynamic() && lo.value == 0 && hi.value == 100
+}
+
 // String renders the range as it appears in TOML, e.g. `[0, "max"]`.
 func (r Range) String() string {
 	lo, hi := r.anchors()
@@ -187,6 +198,12 @@ type Criterion struct {
 	Direction Direction `toml:"direction"`
 	// Range sets the normalization anchors; absent in TOML means [0, 100].
 	Range Range `toml:"range"`
+	// Allocation marks the scores as a distribution the decider hands out across
+	// the options — shares that must sum to 100, the soma-100 slider. It is
+	// mutually exclusive with a custom Range: a share is already a 0-100
+	// contribution under the default [0, 100], so pinning other anchors would
+	// contradict it. Off by default, keeping ordinary 0-100 scores unconstrained.
+	Allocation bool `toml:"allocation,omitempty"`
 }
 
 // Option is one alternative being ranked; Scores maps criterion name to the
@@ -231,6 +248,10 @@ func (d Decision) Rank() ([]Result, error) {
 		totalWeight += c.Weight
 	}
 
+	if err := d.validateAllocations(); err != nil {
+		return nil, err
+	}
+
 	bounds, err := d.resolveBounds()
 	if err != nil {
 		return nil, err
@@ -253,6 +274,39 @@ func (d Decision) Rank() ([]Result, error) {
 		return results[i].Score > results[j].Score
 	})
 	return results, nil
+}
+
+// allocationTolerance is how far the shares of an allocation criterion may sum
+// off 100 before Rank rejects them. Exact-decimal distributions (integer or
+// two-place shares) land within float rounding of this; a real off-by-a-point
+// error is orders of magnitude larger, so it separates rounding from mistakes.
+const allocationTolerance = 1e-6
+
+// validateAllocations enforces the two rules of an allocation criterion: it may
+// not carry a custom Range (a share is already its own [0, 100] contribution),
+// and its scores across the options must sum to 100 — a genuine distribution,
+// not arbitrary values. Both are config/data errors caught before ranking.
+func (d Decision) validateAllocations() error {
+	for _, c := range d.Criteria {
+		if !c.Allocation {
+			continue
+		}
+		if !c.Range.isIdentity() {
+			return fmt.Errorf("pondera: allocation criterion %q cannot also set a range %s", c.Name, c.Range)
+		}
+		var sum float64
+		for _, o := range d.Options {
+			v, ok := o.Scores[c.Name]
+			if !ok {
+				return fmt.Errorf("pondera: option %q missing score for criterion %q", o.Name, c.Name)
+			}
+			sum += v
+		}
+		if len(d.Options) > 0 && math.Abs(sum-100) > allocationTolerance {
+			return fmt.Errorf("pondera: allocation criterion %q shares sum to %g, must sum to 100", c.Name, sum)
+		}
+	}
+	return nil
 }
 
 // span holds the min and max raw value of a criterion across options.

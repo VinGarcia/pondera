@@ -166,3 +166,40 @@ func TestLoadMissingFile(t *testing.T) {
 		t.Error("expected error loading missing file, got nil")
 	}
 }
+
+// TestAllocationRoundTrip proves the allocation flag survives a TOML round-trip
+// and the loaded decision still ranks. Its range is the explicit identity
+// [0, 100] — the only range an allocation criterion may carry, and the exact
+// form serialization always writes back, so the loaded criterion is not just
+// valid but byte-equal.
+func TestAllocationRoundTrip(t *testing.T) {
+	orig := Decision{
+		Title:    "onde investir",
+		LockedAt: time.Date(2026, 8, 24, 10, 0, 0, 0, time.UTC),
+		Criteria: []Criterion{
+			{Name: "impacto", Weight: 3, Direction: Benefit, Allocation: true, Range: NewRange(FixedAnchor(0), FixedAnchor(100))},
+			{Name: "prontidao", Weight: 1, Direction: Benefit, Range: NewRange(FixedAnchor(0), FixedAnchor(100))},
+		},
+		Options: []Option{
+			{Name: "A", Scores: map[string]float64{"impacto": 70, "prontidao": 40}},
+			{Name: "B", Scores: map[string]float64{"impacto": 30, "prontidao": 90}},
+		},
+	}
+	path := filepath.Join(t.TempDir(), "investir.toml")
+	if err := Save(path, orig); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !got.Criteria[0].Allocation {
+		t.Errorf("allocation flag lost in round-trip: %+v", got.Criteria[0])
+	}
+	if !reflect.DeepEqual(got.Criteria, orig.Criteria) {
+		t.Errorf("Criteria: got %+v, want %+v", got.Criteria, orig.Criteria)
+	}
+	if _, err := got.Rank(); err != nil {
+		t.Fatalf("Rank after round-trip: %v", err)
+	}
+}

@@ -289,3 +289,127 @@ func TestRankErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestAllocationRank(t *testing.T) {
+	tests := []struct {
+		name     string
+		decision Decision
+		want     []Result
+	}{
+		{
+			// A benefit allocation criterion's scores are shares that sum to
+			// 100; with the default [0,100] range each share is already its own
+			// 0-100 contribution, so the option holding the larger share ranks
+			// higher. Composed with an ordinary bounded criterion to show an
+			// allocation criterion is just another contribution in the sum.
+			// A = (70*3 + 40*1)/4 = 62.5 ; B = (30*3 + 90*1)/4 = 45.
+			name: "benefit allocation ranks by share",
+			decision: Decision{
+				Title: "onde investir",
+				Criteria: []Criterion{
+					{Name: "impacto", Weight: 3, Allocation: true},
+					{Name: "prontidao", Weight: 1},
+				},
+				Options: []Option{
+					{Name: "A", Scores: map[string]float64{"impacto": 70, "prontidao": 40}},
+					{Name: "B", Scores: map[string]float64{"impacto": 30, "prontidao": 90}},
+				},
+			},
+			want: []Result{
+				{Option: "A", Score: (70*3 + 40*1) / 4.0},
+				{Option: "B", Score: (30*3 + 90*1) / 4.0},
+			},
+		},
+		{
+			// Direction still applies to an allocation criterion: a cost
+			// allocation (e.g. distributing a downside) inverts each share, so
+			// the option carrying the smaller share of the bad thing wins.
+			// culpado 80 -> contrib 20 ; inocente 20 -> contrib 80.
+			name: "cost allocation inverts share",
+			decision: Decision{
+				Criteria: []Criterion{
+					{Name: "dano", Weight: 1, Direction: Cost, Allocation: true},
+				},
+				Options: []Option{
+					{Name: "culpado", Scores: map[string]float64{"dano": 80}},
+					{Name: "inocente", Scores: map[string]float64{"dano": 20}},
+				},
+			},
+			want: []Result{{Option: "inocente", Score: 80}, {Option: "culpado", Score: 20}},
+		},
+		{
+			// A single option trivially holds the whole 100 share: valid, not an
+			// error, and contributes its full share.
+			name: "single option holds the whole allocation",
+			decision: Decision{
+				Criteria: []Criterion{{Name: "foco", Weight: 1, Allocation: true}},
+				Options:  []Option{{Name: "solo", Scores: map[string]float64{"foco": 100}}},
+			},
+			want: []Result{{Option: "solo", Score: 100}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := tt.decision.Rank()
+			if err != nil {
+				t.Fatalf("Rank() error = %v", err)
+			}
+			if len(got) != len(tt.want) {
+				t.Fatalf("Rank() returned %d results, want %d", len(got), len(tt.want))
+			}
+			for i := range got {
+				if got[i].Option != tt.want[i].Option || math.Abs(got[i].Score-tt.want[i].Score) > eps {
+					t.Errorf("result[%d] = %+v, want %+v", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestAllocationErrors(t *testing.T) {
+	tests := []struct {
+		name     string
+		decision Decision
+	}{
+		{
+			// Shares over 100: the allocation does not add up, so the scores are
+			// not a valid distribution — fail loudly rather than rank on bad data.
+			name: "shares sum above 100",
+			decision: Decision{
+				Criteria: []Criterion{{Name: "impacto", Weight: 1, Allocation: true}},
+				Options: []Option{
+					{Name: "A", Scores: map[string]float64{"impacto": 70}},
+					{Name: "B", Scores: map[string]float64{"impacto": 40}},
+				},
+			},
+		},
+		{
+			name: "shares sum below 100",
+			decision: Decision{
+				Criteria: []Criterion{{Name: "impacto", Weight: 1, Allocation: true}},
+				Options: []Option{
+					{Name: "A", Scores: map[string]float64{"impacto": 50}},
+					{Name: "B", Scores: map[string]float64{"impacto": 30}},
+				},
+			},
+		},
+		{
+			// An allocation criterion is inherently a [0,100] share; pinning a
+			// custom range on it contradicts that, so it is a config error.
+			name: "allocation with explicit range",
+			decision: Decision{
+				Criteria: []Criterion{{Name: "impacto", Weight: 1, Allocation: true, Range: NewRange(FixedAnchor(0), FixedAnchor(50))}},
+				Options:  []Option{{Name: "A", Scores: map[string]float64{"impacto": 100}}},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := tt.decision.Rank(); err == nil {
+				t.Fatalf("Rank() expected an error, got nil")
+			}
+		})
+	}
+}
