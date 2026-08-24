@@ -14,18 +14,23 @@ Each criterion has a weight (relative, `> 0`) and two independent settings:
 
 - **direction** — `benefit` (higher is better, the default) or `--cost`
   (higher is worse; the value is inverted).
-- **normalization** — how raw values become a 0–100 contribution. The variant
-  names spell out the anchors (what maps to 0 and what maps to 100):
-  - `bounded` (the default): the value is already a 0–100 quality score, used
-    as-is.
-  - `min-max`: the value is a raw scalar (price, km, hours) anchored to the
-    field — the smallest value across options maps to 0, the largest to 100.
-    Maximally discriminating, but it erases magnitude: two near-identical
-    values still land on 0 and 100.
-  - `zero-max`: a raw scalar anchored at zero — 0 maps to 0, the largest value
-    to 100 (`v/max·100`). Preserves ratios (near-identical values contribute
-    near-identically), so it requires a scale where zero means "none of the
-    attribute"; negative values are rejected.
+- **range** — the two anchors that turn raw values into a 0–100 contribution:
+  the first anchor maps to 0, the second to 100, values between interpolate
+  and values outside clamp. Each anchor is a fixed number or the keyword
+  `"min"`/`"max"` (the smallest/largest value across the options):
+  - `[0, 100]` (the default): the value is already a 0–100 quality score.
+  - `["min", "max"]`: field-relative — the cheapest option maps to 0, the
+    priciest to 100. Maximally discriminating, but it erases magnitude: two
+    near-identical values still land on 0 and 100.
+  - `[0, "max"]`: zero-anchored, ratio-preserving (`v/max·100`) — near-identical
+    values contribute near-identically. The scale must mean "none of the
+    attribute" at zero; an all-negative field contradicts the anchors and errors.
+  - `[40, 80]` (or any fixed pair): rescales a custom window, e.g. a target
+    scale where 40 is "floor" and 80 is "great".
+
+  Anchors resolving to the same point (e.g. all options tie under
+  `["min", "max"]`) cannot discriminate, so the criterion contributes a
+  neutral 50 to every option.
 
 The final index is `Σ(weight × value) / Σ(weight)`, on a 0–100 scale.
 
@@ -40,7 +45,7 @@ $ pondera new --title "New car" car.toml
 
 $ pondera add-criterion --name safety --weight 3 car.toml
 $ pondera add-criterion --name comfort --weight 2 car.toml
-$ pondera add-criterion --name price --weight 1.5 --cost --normalization min-max car.toml
+$ pondera add-criterion --name price --weight 1.5 --cost --range min,max car.toml
 $ pondera lock car.toml
 
 $ pondera add-option --name Corolla car.toml
@@ -57,9 +62,9 @@ $ pondera show car.toml
 New car
   state: locked 2026-08-21 17:19 (accepting options/scores)
   criteria:
-    - safety (weight 3, benefit, bounded)
-    - comfort (weight 2, benefit, bounded)
-    - price (weight 1.5, cost, min-max)
+    - safety (weight 3, benefit, [0, 100])
+    - comfort (weight 2, benefit, [0, 100])
+    - price (weight 1.5, cost, ["min", "max"])
   options:
     - Corolla
         safety = 90
@@ -77,8 +82,8 @@ Ranking for "New car":
 ```
 <!-- END VERIFIED EXAMPLE -->
 
-Civic wins even though the Corolla is safer: it is cheaper (a min-max cost
-criterion, so R$120k beats R$130k) and more comfortable, and those outweigh the
+Civic wins even though the Corolla is safer: it is cheaper (a `["min", "max"]`
+cost criterion, so R$120k beats R$130k) and more comfortable, and those outweigh the
 safety edge at these weights. Change a weight before `lock` and the ranking may
 flip — which is the point.
 
@@ -90,7 +95,7 @@ flip — which is the point.
 
 ```
 pondera new           --title T <file>                          create an open decision
-pondera add-criterion --name N [--weight W] [--cost] [--normalization M] <file>
+pondera add-criterion --name N [--weight W] [--cost] [--range LO,HI] <file>
 pondera set-weight    --name N --weight W <file>                adjust a weight (pre-lock)
 pondera lock          <file>                                    freeze criteria & weights
 pondera add-option    --name N <file>                           add an alternative (post-lock)

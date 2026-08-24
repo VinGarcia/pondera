@@ -56,7 +56,7 @@ func TestRank(t *testing.T) {
 			name: "min-max cost inverts direction",
 			decision: Decision{
 				Criteria: []Criterion{
-					{Name: "preco", Weight: 1, Direction: Cost, Normalization: MinMax},
+					{Name: "preco", Weight: 1, Direction: Cost, Range: NewRange(MinAnchor(), MaxAnchor())},
 				},
 				Options: []Option{
 					{Name: "barato", Scores: map[string]float64{"preco": 100000}},
@@ -70,7 +70,7 @@ func TestRank(t *testing.T) {
 			name: "min-max benefit keeps direction",
 			decision: Decision{
 				Criteria: []Criterion{
-					{Name: "autonomia", Weight: 1, Direction: Benefit, Normalization: MinMax},
+					{Name: "autonomia", Weight: 1, Direction: Benefit, Range: NewRange(MinAnchor(), MaxAnchor())},
 				},
 				Options: []Option{
 					{Name: "curta", Scores: map[string]float64{"autonomia": 300}},
@@ -85,7 +85,7 @@ func TestRank(t *testing.T) {
 			name: "min-max tie is neutral",
 			decision: Decision{
 				Criteria: []Criterion{
-					{Name: "preco", Weight: 1, Direction: Cost, Normalization: MinMax},
+					{Name: "preco", Weight: 1, Direction: Cost, Range: NewRange(MinAnchor(), MaxAnchor())},
 				},
 				Options: []Option{
 					{Name: "X", Scores: map[string]float64{"preco": 50000}},
@@ -101,7 +101,7 @@ func TestRank(t *testing.T) {
 			decision: Decision{
 				Criteria: []Criterion{
 					{Name: "conforto", Weight: 2}, // percent
-					{Name: "preco", Weight: 1, Direction: Cost, Normalization: MinMax},
+					{Name: "preco", Weight: 1, Direction: Cost, Range: NewRange(MinAnchor(), MaxAnchor())},
 				},
 				Options: []Option{
 					// conforto 40; preco 100k -> cost 100. index=(40*2+100*1)/3=60
@@ -121,7 +121,7 @@ func TestRank(t *testing.T) {
 			name: "zero-max preserves magnitude",
 			decision: Decision{
 				Criteria: []Criterion{
-					{Name: "autonomia", Weight: 1, Direction: Benefit, Normalization: ZeroMax},
+					{Name: "autonomia", Weight: 1, Direction: Benefit, Range: NewRange(FixedAnchor(0), MaxAnchor())},
 				},
 				Options: []Option{
 					{Name: "curta", Scores: map[string]float64{"autonomia": 300}},
@@ -136,7 +136,7 @@ func TestRank(t *testing.T) {
 			name: "zero-max cost inverts direction",
 			decision: Decision{
 				Criteria: []Criterion{
-					{Name: "preco", Weight: 1, Direction: Cost, Normalization: ZeroMax},
+					{Name: "preco", Weight: 1, Direction: Cost, Range: NewRange(FixedAnchor(0), MaxAnchor())},
 				},
 				Options: []Option{
 					{Name: "barato", Scores: map[string]float64{"preco": 100}},
@@ -154,7 +154,7 @@ func TestRank(t *testing.T) {
 			name: "zero-max all-zero is neutral",
 			decision: Decision{
 				Criteria: []Criterion{
-					{Name: "custo", Weight: 1, Direction: Cost, Normalization: ZeroMax},
+					{Name: "custo", Weight: 1, Direction: Cost, Range: NewRange(FixedAnchor(0), MaxAnchor())},
 				},
 				Options: []Option{
 					{Name: "X", Scores: map[string]float64{"custo": 0}},
@@ -162,6 +162,26 @@ func TestRank(t *testing.T) {
 				},
 			},
 			want: []Result{{Option: "X", Score: 50}, {Option: "Y", Score: 50}},
+		},
+		{
+			// A custom fixed window rescales inside it and clamps outside it:
+			// with [40, 80], 30 -> 0, 60 -> 50, 90 -> 100.
+			name: "custom fixed range interpolates and clamps",
+			decision: Decision{
+				Criteria: []Criterion{
+					{Name: "nota", Weight: 1, Range: NewRange(FixedAnchor(40), FixedAnchor(80))},
+				},
+				Options: []Option{
+					{Name: "abaixo", Scores: map[string]float64{"nota": 30}},
+					{Name: "meio", Scores: map[string]float64{"nota": 60}},
+					{Name: "acima", Scores: map[string]float64{"nota": 90}},
+				},
+			},
+			want: []Result{
+				{Option: "acima", Score: 100},
+				{Option: "meio", Score: 50},
+				{Option: "abaixo", Score: 0},
+			},
 		},
 		{
 			// Bounded scores are clamped into 0-100 so a stray out-of-range
@@ -223,18 +243,26 @@ func TestRankErrors(t *testing.T) {
 			},
 		},
 		{
-			// A zero-anchored scale has no meaning for negatives: bad data, not
-			// a valid case.
-			name: "negative value on zero-max criterion",
+			// [0, "max"] over an all-negative field resolves to hi < lo: the
+			// data contradicts the anchors — bad data, not a valid case.
+			name: "zero-max anchors contradicted by all-negative values",
 			decision: Decision{
-				Criteria: []Criterion{{Name: "x", Weight: 1, Normalization: ZeroMax}},
+				Criteria: []Criterion{{Name: "x", Weight: 1, Range: NewRange(FixedAnchor(0), MaxAnchor())}},
 				Options:  []Option{{Name: "A", Scores: map[string]float64{"x": -5}}},
+			},
+		},
+		{
+			// A fixed pair with hi <= lo can never map values: config error.
+			name: "fixed range with hi below lo",
+			decision: Decision{
+				Criteria: []Criterion{{Name: "x", Weight: 1, Range: NewRange(FixedAnchor(80), FixedAnchor(40))}},
+				Options:  []Option{{Name: "A", Scores: map[string]float64{"x": 50}}},
 			},
 		},
 		{
 			name: "missing score on normalized criterion",
 			decision: Decision{
-				Criteria: []Criterion{{Name: "x", Weight: 1, Normalization: MinMax}},
+				Criteria: []Criterion{{Name: "x", Weight: 1, Range: NewRange(MinAnchor(), MaxAnchor())}},
 				Options: []Option{
 					{Name: "A", Scores: map[string]float64{"x": 10}},
 					{Name: "B", Scores: map[string]float64{}},

@@ -73,7 +73,7 @@ func usage(out io.Writer) {
 
 Commands:
   new           --title T <file>                       create an open decision
-  add-criterion --name N [--weight W] [--cost] [--normalization M] <file>
+  add-criterion --name N [--weight W] [--cost] [--range LO,HI] <file>
   set-weight    --name N --weight W <file>             adjust a weight (pre-lock)
   lock          <file>                                 freeze criteria & weights
   add-option    --name N <file>                        add an alternative (post-lock)
@@ -135,7 +135,7 @@ func cmdAddCriterion(args []string) error {
 	name := fs.String("name", "", "criterion name (required)")
 	weight := fs.Float64("weight", 1.0, "relative weight (> 0)")
 	cost := fs.Bool("cost", false, "higher value is worse (subtractive)")
-	normalization := fs.String("normalization", "bounded", "scoring mode: bounded, min-max, or zero-max")
+	rangeSpec := fs.String("range", "0,100", "normalization anchors: LO,HI where each is a number, min, or max")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -147,16 +147,16 @@ func cmdAddCriterion(args []string) error {
 	if *cost {
 		dir = pondera.Cost
 	}
-	var norm pondera.Normalization
-	if err := norm.UnmarshalText([]byte(*normalization)); err != nil {
+	rng, err := pondera.ParseRange(*rangeSpec)
+	if err != nil {
 		return err
 	}
 	return edit(path, func(d *pondera.Decision) error {
 		return d.AddCriterion(pondera.Criterion{
-			Name:          *name,
-			Weight:        *weight,
-			Direction:     dir,
-			Normalization: norm,
+			Name:      *name,
+			Weight:    *weight,
+			Direction: dir,
+			Range:     rng,
 		})
 	})
 }
@@ -279,9 +279,8 @@ func cmdShow(args []string, out io.Writer) error {
 	fmt.Fprintf(out, "%s\n  state: %s\n", d.Title, state)
 	fmt.Fprintln(out, "  criteria:")
 	for _, c := range d.Criteria {
-		mode, _ := c.Normalization.MarshalText()
 		dir, _ := c.Direction.MarshalText()
-		fmt.Fprintf(out, "    - %s (weight %g, %s, %s)\n", c.Name, c.Weight, dir, mode)
+		fmt.Fprintf(out, "    - %s (weight %g, %s, %s)\n", c.Name, c.Weight, dir, c.Range)
 	}
 	if len(d.Options) == 0 {
 		return nil

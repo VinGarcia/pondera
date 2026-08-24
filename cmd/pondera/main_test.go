@@ -25,7 +25,7 @@ func TestFullFlow(t *testing.T) {
 
 	mustRun(t, &sink, "new", "--title", "New car", file)
 	mustRun(t, &sink, "add-criterion", "--name", "safety", "--weight", "3", file)
-	mustRun(t, &sink, "add-criterion", "--name", "price", "--weight", "2", "--cost", "--normalization", "min-max", file)
+	mustRun(t, &sink, "add-criterion", "--name", "price", "--weight", "2", "--cost", "--range", "min,max", file)
 	mustRun(t, &sink, "lock", file)
 	mustRun(t, &sink, "add-option", "--name", "A", file)
 	mustRun(t, &sink, "add-option", "--name", "B", file)
@@ -88,9 +88,9 @@ func TestArgErrors(t *testing.T) {
 		{"new", file},                       // missing --title
 		{"lock"},                            // missing <file>
 		{"set-weight", "--name", "x", file}, // missing --weight
-		{"score", "--option", "A", "--criterion", "x", file},                  // missing --value
-		{"rank", "missing.toml"},                                              // load nonexistent file
-		{"add-criterion", "--name", "z", "--normalization", "absolute", file}, // unknown normalization keyword
+		{"score", "--option", "A", "--criterion", "x", file},       // missing --value
+		{"rank", "missing.toml"},                                   // load nonexistent file
+		{"add-criterion", "--name", "z", "--range", "0,avg", file}, // unknown range keyword
 	}
 	for _, args := range cases {
 		if err := run(args, &sink); err == nil {

@@ -18,9 +18,9 @@ func sampleDecision() Decision {
 		Title:    "Qual carro comprar",
 		LockedAt: time.Date(2026, 8, 21, 15, 0, 0, 0, time.UTC),
 		Criteria: []Criterion{
-			{Name: "seguranca", Weight: 3, Direction: Benefit},
-			{Name: "preco", Weight: 1.5, Direction: Cost},
-			{Name: "km_rodados", Weight: 1.2, Direction: Cost, Normalization: MinMax},
+			{Name: "seguranca", Weight: 3, Direction: Benefit, Range: NewRange(FixedAnchor(0), FixedAnchor(100))},
+			{Name: "preco", Weight: 1.5, Direction: Cost, Range: NewRange(FixedAnchor(0), FixedAnchor(100))},
+			{Name: "km_rodados", Weight: 1.2, Direction: Cost, Range: NewRange(MinAnchor(), MaxAnchor())},
 		},
 		Options: []Option{
 			{Name: "Modelo A", Scores: map[string]float64{"seguranca": 80, "preco": 60, "km_rodados": 40000}},
@@ -78,10 +78,14 @@ func TestMarshalIsStableAndReadable(t *testing.T) {
 		t.Fatalf("Marshal: %v", err)
 	}
 
-	// Directions serialize as words, not enum integers.
+	// Directions serialize as words, not enum integers, and ranges as their
+	// anchor arrays — including the explicit [0, 100] default.
 	toml := string(data)
 	if !strings.Contains(toml, `direction = "benefit"`) || !strings.Contains(toml, `direction = "cost"`) {
 		t.Errorf("expected word directions in output, got:\n%s", toml)
+	}
+	if !strings.Contains(toml, `range = ["min", "max"]`) || !strings.Contains(toml, `range = [0, 100]`) {
+		t.Errorf("expected anchor-array ranges in output, got:\n%s", toml)
 	}
 
 	// Re-encoding the decoded value reproduces the bytes exactly (map keys and
@@ -130,6 +134,14 @@ func TestUnmarshalErrors(t *testing.T) {
 		{
 			name: "unknown direction keyword",
 			toml: "title = \"x\"\n[[criteria]]\nname = \"a\"\nweight = 1\ndirection = \"neutral\"\n",
+		},
+		{
+			name: "unknown range keyword",
+			toml: "title = \"x\"\n[[criteria]]\nname = \"a\"\nweight = 1\ndirection = \"benefit\"\nrange = [0, \"avg\"]\n",
+		},
+		{
+			name: "range with wrong arity",
+			toml: "title = \"x\"\n[[criteria]]\nname = \"a\"\nweight = 1\ndirection = \"benefit\"\nrange = [0, 50, 100]\n",
 		},
 		{
 			name: "unknown key typo",

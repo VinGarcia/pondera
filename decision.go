@@ -1,21 +1,25 @@
 // Package pondera scores decisions by weighted values: a single decider ranks
-// M options across K weighted criteria. Each criterion is either bounded
-// (score measures "how much of the attribute" on a 0-100 scale, so units can't
-// smuggle weight past the declared Weight) or a raw scalar normalized across
-// the options — min-max (field-relative) or zero-max (ratio-preserving); see
-// Normalization. The criterion direction decides whether more of the attribute
-// is better or worse, in every mode.
+// M options across K weighted criteria. Every criterion turns its raw values
+// into a 0-100 contribution through a Range — two anchors saying what maps to
+// 0 and what maps to 100. Anchors are fixed numbers or the keywords
+// "min"/"max" (the smallest/largest value across the options), so [0, 100] is
+// a plain bounded quality score (the default), ["min", "max"] is
+// field-relative, [0, "max"] is zero-anchored ratio-preserving, and [40, 80]
+// rescales a custom window. The criterion direction decides whether more of
+// the attribute is better or worse.
 package pondera
 
 import (
 	"fmt"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 )
 
 // Direction says how a criterion's value maps to desirability. It applies to
-// every criterion: a bounded cost score of 90 ("90-much of a bad thing, e.g.
-// price") contributes 10.
+// every criterion: a cost contribution of 90 ("90-much of a bad thing, e.g.
+// price") counts as 10.
 type Direction int
 
 const (
@@ -53,57 +57,127 @@ func (dir *Direction) UnmarshalText(text []byte) error {
 	return nil
 }
 
-// Normalization says how a criterion's raw values become a 0-100 contribution.
-// The variant names spell out the anchors: what maps to 0 and what maps to 100.
-type Normalization int
+// Anchor is one end of a criterion's Range: a fixed number, or a keyword
+// ("min"/"max") resolved against the options' values for that criterion at
+// Rank time.
+type Anchor struct {
+	keyword string  // "" = fixed; otherwise "min" or "max"
+	value   float64 // the fixed value when keyword is ""
+}
 
-const (
-	// Bounded (the default) means the score is already a 0-100 measure of the
-	// attribute; it is clamped, never rescaled.
-	Bounded Normalization = iota
-	// MinMax means the score is a raw scalar anchored to the field: the
-	// smallest value across options maps to 0, the largest to 100. Maximally
-	// discriminating, but it erases magnitude — two near-identical values
-	// still land on 0 and 100.
-	MinMax
-	// ZeroMax means the score is a raw scalar anchored at zero: 0 maps to 0,
-	// the largest value across options to 100 (v/max·100). Preserves ratios —
-	// near-identical values contribute near-identically — so it requires a
-	// scale where zero means "none of the attribute" (price, km, tokens);
-	// negative values are rejected.
-	ZeroMax
-)
+// FixedAnchor returns an anchor pinned at a number.
+func FixedAnchor(v float64) Anchor { return Anchor{value: v} }
 
-// MarshalText renders the normalization as its TOML keyword so a saved
-// decision reads in words, not an opaque enum integer.
-func (n Normalization) MarshalText() ([]byte, error) {
-	switch n {
-	case Bounded:
-		return []byte("bounded"), nil
-	case MinMax:
-		return []byte("min-max"), nil
-	case ZeroMax:
-		return []byte("zero-max"), nil
+// MinAnchor returns the anchor that resolves to the field's smallest value.
+func MinAnchor() Anchor { return Anchor{keyword: "min"} }
+
+// MaxAnchor returns the anchor that resolves to the field's largest value.
+func MaxAnchor() Anchor { return Anchor{keyword: "max"} }
+
+// ParseAnchor reads an anchor from its textual form: "min", "max", or a number.
+func ParseAnchor(s string) (Anchor, error) {
+	switch s {
+	case "min":
+		return MinAnchor(), nil
+	case "max":
+		return MaxAnchor(), nil
+	}
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return Anchor{}, fmt.Errorf("pondera: anchor must be a number, %q, or %q; got %q", "min", "max", s)
+	}
+	return FixedAnchor(v), nil
+}
+
+// String renders the anchor the way it appears inside a TOML range.
+func (a Anchor) String() string {
+	if a.keyword != "" {
+		return strconv.Quote(a.keyword)
+	}
+	return strconv.FormatFloat(a.value, 'g', -1, 64)
+}
+
+// resolve returns the anchor's numeric value against the field's span.
+func (a Anchor) resolve(s span) float64 {
+	switch a.keyword {
+	case "min":
+		return s.min
+	case "max":
+		return s.max
 	default:
-		return nil, fmt.Errorf("pondera: unknown normalization %d", int(n))
+		return a.value
 	}
 }
 
-// UnmarshalText parses a normalization keyword, rejecting anything but the
-// known words so a typo in a hand-edited file fails loudly instead of silently
-// defaulting to bounded.
-func (n *Normalization) UnmarshalText(text []byte) error {
-	switch string(text) {
-	case "bounded":
-		*n = Bounded
-	case "min-max":
-		*n = MinMax
-	case "zero-max":
-		*n = ZeroMax
-	default:
-		return fmt.Errorf("pondera: unknown normalization %q", text)
+// dynamic reports whether the anchor depends on the field of options.
+func (a Anchor) dynamic() bool { return a.keyword != "" }
+
+// Range is the pair of anchors a criterion's values are normalized through:
+// Lo maps to contribution 0, Hi to 100, values between interpolate and values
+// outside clamp. The zero value (key absent in TOML) means the default
+// [0, 100].
+type Range struct {
+	lo, hi Anchor
+	set    bool
+}
+
+// NewRange builds a range from its two anchors.
+func NewRange(lo Anchor, hi Anchor) Range { return Range{lo: lo, hi: hi, set: true} }
+
+// anchors returns the effective pair, applying the [0, 100] default.
+func (r Range) anchors() (Anchor, Anchor) {
+	if !r.set {
+		return FixedAnchor(0), FixedAnchor(100)
 	}
+	return r.lo, r.hi
+}
+
+// String renders the range as it appears in TOML, e.g. `[0, "max"]`.
+func (r Range) String() string {
+	lo, hi := r.anchors()
+	return "[" + lo.String() + ", " + hi.String() + "]"
+}
+
+// UnmarshalTOML decodes a two-element TOML array whose entries are numbers or
+// the keywords "min"/"max", rejecting anything else so a typo in a hand-edited
+// file fails loudly.
+func (r *Range) UnmarshalTOML(v interface{}) error {
+	list, ok := v.([]interface{})
+	if !ok || len(list) != 2 {
+		return fmt.Errorf("pondera: range must be a two-element array like [0, 100], got %v", v)
+	}
+	parse := func(e interface{}) (Anchor, error) {
+		switch x := e.(type) {
+		case int64:
+			return FixedAnchor(float64(x)), nil
+		case float64:
+			return FixedAnchor(x), nil
+		case string:
+			if x != "min" && x != "max" {
+				return Anchor{}, fmt.Errorf("pondera: unknown range keyword %q (want %q or %q)", x, "min", "max")
+			}
+			return Anchor{keyword: x}, nil
+		default:
+			return Anchor{}, fmt.Errorf("pondera: range entry must be a number, %q, or %q; got %v", "min", "max", e)
+		}
+	}
+	lo, err := parse(list[0])
+	if err != nil {
+		return err
+	}
+	hi, err := parse(list[1])
+	if err != nil {
+		return err
+	}
+	*r = NewRange(lo, hi)
 	return nil
+}
+
+// MarshalTOML renders the range as its array form; an unset range is written
+// out as the explicit default [0, 100], so a saved file always shows the
+// anchors in effect.
+func (r Range) MarshalTOML() ([]byte, error) {
+	return []byte(r.String()), nil
 }
 
 // Criterion is one weighted value the decision is scored against.
@@ -111,12 +185,13 @@ type Criterion struct {
 	Name      string    `toml:"name"`
 	Weight    float64   `toml:"weight"` // must be > 0
 	Direction Direction `toml:"direction"`
-	// Normalization switches the scoring mode; absent in TOML means Bounded.
-	Normalization Normalization `toml:"normalization,omitempty"`
+	// Range sets the normalization anchors; absent in TOML means [0, 100].
+	Range Range `toml:"range"`
 }
 
 // Option is one alternative being ranked; Scores maps criterion name to the
-// option's value for that criterion (a 0-100 quality-% or a raw scalar).
+// option's value for that criterion (a 0-100 quality-% or a raw scalar,
+// depending on the criterion's range).
 type Option struct {
 	Name   string             `toml:"name"`
 	Scores map[string]float64 `toml:"scores"`
@@ -141,8 +216,8 @@ type Result struct {
 
 // Rank computes each option's desirability and returns the options ordered from
 // most to least desirable (stable on ties). It errors on an empty criteria set,
-// a non-positive weight, or an option missing a score for any criterion — the
-// engine never silently treats a missing value as zero.
+// a non-positive weight, an invalid range, or an option missing a score for any
+// criterion — the engine never silently treats a missing value as zero.
 func (d Decision) Rank() ([]Result, error) {
 	if len(d.Criteria) == 0 {
 		return nil, fmt.Errorf("pondera: decision %q has no criteria", d.Title)
@@ -156,7 +231,7 @@ func (d Decision) Rank() ([]Result, error) {
 		totalWeight += c.Weight
 	}
 
-	bounds, err := d.normalizationSpans()
+	bounds, err := d.resolveBounds()
 	if err != nil {
 		return nil, err
 	}
@@ -180,69 +255,64 @@ func (d Decision) Rank() ([]Result, error) {
 	return results, nil
 }
 
-// span holds the min and max raw value of a normalized criterion across options.
+// span holds the min and max raw value of a criterion across options.
 type span struct{ min, max float64 }
 
-// normalizationSpans precomputes the value range of every non-bounded
-// criterion so a single option's contribution can be normalized against the
-// whole field. It also rejects negative values on zero-max criteria: on a
-// zero-anchored scale a negative is bad data, not a valid case.
-func (d Decision) normalizationSpans() (map[string]span, error) {
-	bounds := make(map[string]span)
+// bounds is a criterion's range with its anchors resolved to numbers.
+type bounds struct{ lo, hi float64 }
+
+// resolveBounds turns every criterion's range into numeric lo/hi, scanning the
+// options' values once for the criteria whose anchors are dynamic. It rejects
+// a range that cannot map values sensibly: a fixed pair with hi <= lo is a
+// config error, and a dynamic pair resolving to hi < lo means the data
+// contradicts the anchors (e.g. [0, "max"] over all-negative values).
+func (d Decision) resolveBounds() (map[string]bounds, error) {
+	resolved := make(map[string]bounds, len(d.Criteria))
 	for _, c := range d.Criteria {
-		if c.Normalization == Bounded {
-			continue
+		lo, hi := c.Range.anchors()
+		if !lo.dynamic() && !hi.dynamic() && hi.value <= lo.value {
+			return nil, fmt.Errorf("pondera: criterion %q has range %s with hi <= lo", c.Name, c.Range)
 		}
 		var s span
-		seen := false
-		for _, o := range d.Options {
-			v, ok := o.Scores[c.Name]
-			if !ok {
-				return nil, fmt.Errorf("pondera: option %q missing score for criterion %q", o.Name, c.Name)
-			}
-			if c.Normalization == ZeroMax && v < 0 {
-				return nil, fmt.Errorf("pondera: option %q has negative value %g on zero-max criterion %q", o.Name, v, c.Name)
-			}
-			if !seen {
-				s = span{min: v, max: v}
-				seen = true
-				continue
-			}
-			if v < s.min {
-				s.min = v
-			}
-			if v > s.max {
-				s.max = v
+		if lo.dynamic() || hi.dynamic() {
+			seen := false
+			for _, o := range d.Options {
+				v, ok := o.Scores[c.Name]
+				if !ok {
+					return nil, fmt.Errorf("pondera: option %q missing score for criterion %q", o.Name, c.Name)
+				}
+				if !seen {
+					s = span{min: v, max: v}
+					seen = true
+					continue
+				}
+				if v < s.min {
+					s.min = v
+				}
+				if v > s.max {
+					s.max = v
+				}
 			}
 		}
-		bounds[c.Name] = s
+		b := bounds{lo: lo.resolve(s), hi: hi.resolve(s)}
+		if b.hi < b.lo {
+			return nil, fmt.Errorf("pondera: criterion %q range %s resolved to [%g, %g]; the options' values contradict the anchors", c.Name, c.Range, b.lo, b.hi)
+		}
+		resolved[c.Name] = b
 	}
-	return bounds, nil
+	return resolved, nil
 }
 
 // contribution maps one option's value for a criterion to a 0-100 desirability
-// contribution, applying the criterion's normalization and direction.
-func contribution(c Criterion, v float64, s span) float64 {
+// contribution: interpolate between the resolved anchors (clamping outside
+// them), then apply direction. Anchors that resolve to the same point cannot
+// discriminate, so the criterion contributes neutrally (50) to every option.
+func contribution(c Criterion, v float64, b bounds) float64 {
 	var norm float64
-	switch c.Normalization {
-	case MinMax:
-		// Anchors: field min → 0, field max → 100. When every option ties the
-		// criterion cannot discriminate, so it contributes neutrally (50).
-		if s.max == s.min {
-			norm = 50
-		} else {
-			norm = (v - s.min) / (s.max - s.min) * 100
-		}
-	case ZeroMax:
-		// Anchors: 0 → 0, field max → 100. All-zero fields tie, same neutral 50.
-		if s.max == 0 {
-			norm = 50
-		} else {
-			norm = v / s.max * 100
-		}
-	default:
-		// Bounded: the score is already on the 0-100 scale; clamp only.
-		norm = clamp(v, 0, 100)
+	if b.hi == b.lo {
+		norm = 50
+	} else {
+		norm = clamp((v-b.lo)/(b.hi-b.lo), 0, 1) * 100
 	}
 	if c.Direction == Cost {
 		norm = 100 - norm
@@ -259,4 +329,22 @@ func clamp(v, lo, hi float64) float64 {
 	default:
 		return v
 	}
+}
+
+// ParseRange reads a range from its CLI form "lo,hi", e.g. "0,100" or
+// "min,max" or "0,max".
+func ParseRange(s string) (Range, error) {
+	parts := strings.Split(s, ",")
+	if len(parts) != 2 {
+		return Range{}, fmt.Errorf("pondera: range must be two comma-separated anchors like 0,100 or min,max; got %q", s)
+	}
+	lo, err := ParseAnchor(strings.TrimSpace(parts[0]))
+	if err != nil {
+		return Range{}, err
+	}
+	hi, err := ParseAnchor(strings.TrimSpace(parts[1]))
+	if err != nil {
+		return Range{}, err
+	}
+	return NewRange(lo, hi), nil
 }
