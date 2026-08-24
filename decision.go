@@ -216,7 +216,11 @@ type Option struct {
 
 // Decision is a single decider's weighted comparison of options.
 type Decision struct {
-	Title    string      `toml:"title"`
+	Title string `toml:"title"`
+	// Owner is who the decision belongs to; it scopes a Store so one person's
+	// decisions never appear in another's list. Persisted from the start so the
+	// on-disk format never has to be migrated to add multi-owner support later.
+	Owner    string      `toml:"owner,omitempty"`
 	Criteria []Criterion `toml:"criteria"`
 	Options  []Option    `toml:"options"`
 	// LockedAt records when the criteria and weights were frozen. Its zero value
