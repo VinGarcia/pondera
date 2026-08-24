@@ -252,6 +252,16 @@ func TestRankErrors(t *testing.T) {
 			},
 		},
 		{
+			// The mirror case: ["min", 0] over an all-positive field also
+			// resolves to hi < lo — the inverted-resolution check is symmetric,
+			// not special-cased to which anchor is dynamic.
+			name: "min-zero anchors contradicted by all-positive values",
+			decision: Decision{
+				Criteria: []Criterion{{Name: "x", Weight: 1, Range: NewRange(MinAnchor(), FixedAnchor(0))}},
+				Options:  []Option{{Name: "A", Scores: map[string]float64{"x": 5}}},
+			},
+		},
+		{
 			// A fixed pair with hi <= lo can never map values: config error.
 			name: "fixed range with hi below lo",
 			decision: Decision{
