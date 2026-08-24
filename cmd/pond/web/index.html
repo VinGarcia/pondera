@@ -9,7 +9,7 @@
   <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
   <style>
     :root { color-scheme: light dark; }
-    body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
+    body { font-family: system-ui, sans-serif; max-width: 42rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
     h1 { font-size: 1.4rem; }
     h1 small { font-weight: normal; opacity: 0.6; font-size: 0.9rem; }
     ul { list-style: none; padding: 0; }
@@ -21,13 +21,25 @@
     tr:first-child td { font-weight: 600; }
     .muted { opacity: 0.6; }
     .error { color: #c0392b; }
-    button { font: inherit; cursor: pointer; margin-bottom: 1rem; }
+    button { font: inherit; cursor: pointer; }
+    .toolbar { margin-bottom: 1rem; }
+    fieldset { border: 1px solid #8884; border-radius: 0.4rem; margin: 0.75rem 0; padding: 0.5rem 0.75rem; }
+    legend { font-weight: 600; padding: 0 0.4rem; }
+    label { display: inline-block; }
+    input, select { font: inherit; padding: 0.2rem 0.3rem; }
+    input.name { width: 9rem; }
+    input.num { width: 5rem; text-align: right; font-variant-numeric: tabular-nums; }
+    .row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin: 0.3rem 0; }
+    .share { font-variant-numeric: tabular-nums; opacity: 0.7; min-width: 3rem; }
+    .rm { color: #c0392b; border: none; background: none; }
+    .actions { margin-top: 1rem; display: flex; gap: 0.75rem; align-items: center; }
   </style>
 </head>
 <body>
   <div id="app">
     <h1>pondera <small>rank options by weighted values</small></h1>
 
+    <!-- Ranking view: an existing decision opened from the list. -->
     <template v-if="chosen">
       <button @click="chosen = null">&larr; all decisions</button>
       <h2>{{ chosen }}</h2>
@@ -42,7 +54,54 @@
       </table>
     </template>
 
+    <!-- Creation view: build a decision, then POST it. -->
+    <template v-else-if="creating">
+      <button @click="creating = false">&larr; all decisions</button>
+      <h2>New decision</h2>
+
+      <div class="row">
+        <label>Title <input class="name" v-model="draft.title" placeholder="pick-laptop"></label>
+      </div>
+
+      <fieldset>
+        <legend>Criteria</legend>
+        <p class="muted">Weights are relative; the share each one carries is shown live.</p>
+        <div class="row" v-for="(c, ci) in draft.criteria" :key="ci">
+          <input class="name" v-model="c.name" placeholder="battery">
+          <label>weight <input class="num" type="number" min="0" step="1" v-model.number="c.weight"></label>
+          <select v-model="c.direction">
+            <option value="benefit">higher is better</option>
+            <option value="cost">lower is better</option>
+          </select>
+          <span class="share">{{ share(c.weight) }}</span>
+          <button class="rm" @click="removeCriterion(ci)" v-if="draft.criteria.length > 1">remove</button>
+        </div>
+        <button @click="addCriterion">+ criterion</button>
+      </fieldset>
+
+      <fieldset>
+        <legend>Options</legend>
+        <div class="row" v-for="(o, oi) in draft.options" :key="oi">
+          <input class="name" v-model="o.name" placeholder="light">
+          <label v-for="(c, ci) in draft.criteria" :key="ci">
+            {{ c.name || 'criterion ' + (ci + 1) }}
+            <input class="num" type="number" step="any" v-model.number="o.scores[ci]">
+          </label>
+          <button class="rm" @click="removeOption(oi)" v-if="draft.options.length > 1">remove</button>
+        </div>
+        <button @click="addOption">+ option</button>
+      </fieldset>
+
+      <p v-if="createError" class="error">{{ createError }}</p>
+      <div class="actions">
+        <button @click="create">Create decision</button>
+        <button @click="creating = false">Cancel</button>
+      </div>
+    </template>
+
+    <!-- List view: pick a decision to rank, or start a new one. -->
     <template v-else>
+      <div class="toolbar"><button @click="startCreate">+ New decision</button></div>
       <p v-if="loadError" class="error">{{ loadError }}</p>
       <p v-else-if="!decisions.length" class="muted">No decisions yet.</p>
       <ul v-else>
@@ -53,9 +112,17 @@
 
   <script>
     const { createApp } = Vue;
+    const blankDraft = () => ({
+      title: '',
+      criteria: [{ name: '', weight: 1, direction: 'benefit' }],
+      options: [{ name: '', scores: {} }],
+    });
     createApp({
       data() {
-        return { decisions: [], chosen: null, ranking: [], loadError: '', rankError: '' };
+        return {
+          decisions: [], chosen: null, ranking: [], loadError: '', rankError: '',
+          creating: false, draft: blankDraft(), createError: '',
+        };
       },
       async mounted() { await this.reload(); },
       methods: {
@@ -72,6 +139,45 @@
           if (res.status === 422) { this.rankError = await res.text(); return; }
           if (!res.ok) { this.rankError = 'HTTP ' + res.status; return; }
           this.ranking = await res.json();
+        },
+        startCreate() {
+          this.draft = blankDraft(); this.createError = ''; this.creating = true;
+        },
+        addCriterion() { this.draft.criteria.push({ name: '', weight: 1, direction: 'benefit' }); },
+        removeCriterion(i) { this.draft.criteria.splice(i, 1); },
+        addOption() { this.draft.options.push({ name: '', scores: {} }); },
+        removeOption(i) { this.draft.options.splice(i, 1); },
+        share(weight) {
+          const total = this.draft.criteria.reduce((s, c) => s + (Number(c.weight) || 0), 0);
+          if (total <= 0) return '—';
+          return Math.round((Number(weight) || 0) / total * 100) + '%';
+        },
+        // build assembles the exact Decision JSON the backend decodes: field names
+        // match the Go struct, Direction is its keyword, Scores is keyed by
+        // criterion NAME (the form edits scores by row index, so remap here).
+        build() {
+          return {
+            Title: this.draft.title.trim(),
+            Criteria: this.draft.criteria.map((c) => ({
+              Name: c.name.trim(), Weight: Number(c.weight) || 0, Direction: c.direction,
+            })),
+            Options: this.draft.options.map((o) => {
+              const scores = {};
+              this.draft.criteria.forEach((c, ci) => { scores[c.name.trim()] = Number(o.scores[ci]) || 0; });
+              return { Name: o.name.trim(), Scores: scores };
+            }),
+          };
+        },
+        async create() {
+          this.createError = '';
+          const res = await fetch('decisions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(this.build()),
+          });
+          if (!res.ok) { this.createError = (await res.text()) || ('HTTP ' + res.status); return; }
+          this.creating = false;
+          await this.reload();
         },
       },
     }).mount('#app');
