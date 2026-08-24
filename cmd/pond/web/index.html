@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>pondera — rank options by weighted values</title>
+  <!-- Vue 3 from a CDN: the whole SPA is this one embedded file, no build step,
+       so `pond serve` is all a family-demo machine needs. -->
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
+    h1 { font-size: 1.4rem; }
+    h1 small { font-weight: normal; opacity: 0.6; font-size: 0.9rem; }
+    ul { list-style: none; padding: 0; }
+    li { padding: 0.4rem 0; }
+    a { cursor: pointer; text-decoration: underline; }
+    table { border-collapse: collapse; width: 100%; margin-top: 0.5rem; }
+    th, td { text-align: left; padding: 0.35rem 0.6rem; border-bottom: 1px solid #8884; }
+    td.score { text-align: right; font-variant-numeric: tabular-nums; }
+    tr:first-child td { font-weight: 600; }
+    .muted { opacity: 0.6; }
+    .error { color: #c0392b; }
+    button { font: inherit; cursor: pointer; margin-bottom: 1rem; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <h1>pondera <small>rank options by weighted values</small></h1>
+
+    <template v-if="chosen">
+      <button @click="chosen = null">&larr; all decisions</button>
+      <h2>{{ chosen }}</h2>
+      <p v-if="rankError" class="error">Can't rank yet: {{ rankError }}</p>
+      <table v-else-if="ranking.length">
+        <thead><tr><th>#</th><th>Option</th><th class="score">Score</th></tr></thead>
+        <tbody>
+          <tr v-for="(r, i) in ranking" :key="r.Option">
+            <td>{{ i + 1 }}</td><td>{{ r.Option }}</td><td class="score">{{ r.Score.toFixed(2) }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </template>
+
+    <template v-else>
+      <p v-if="loadError" class="error">{{ loadError }}</p>
+      <p v-else-if="!decisions.length" class="muted">No decisions yet.</p>
+      <ul v-else>
+        <li v-for="t in decisions" :key="t"><a @click="open(t)">{{ t }}</a></li>
+      </ul>
+    </template>
+  </div>
+
+  <script>
+    const { createApp } = Vue;
+    createApp({
+      data() {
+        return { decisions: [], chosen: null, ranking: [], loadError: '', rankError: '' };
+      },
+      async mounted() { await this.reload(); },
+      methods: {
+        async reload() {
+          try {
+            const res = await fetch('decisions');
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            this.decisions = await res.json();
+          } catch (e) { this.loadError = 'Could not load decisions: ' + e.message; }
+        },
+        async open(title) {
+          this.chosen = title; this.ranking = []; this.rankError = '';
+          const res = await fetch('decisions/' + encodeURIComponent(title) + '/rank');
+          if (res.status === 422) { this.rankError = await res.text(); return; }
+          if (!res.ok) { this.rankError = 'HTTP ' + res.status; return; }
+          this.ranking = await res.json();
+        },
+      },
+    }).mount('#app');
+  </script>
+</body>
+</html>

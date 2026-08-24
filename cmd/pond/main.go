@@ -59,6 +59,8 @@ func run(args []string, out io.Writer) error {
 		return cmdRank(rest, out)
 	case "show":
 		return cmdShow(rest, out)
+	case "serve":
+		return cmdServe(rest)
 	case "help", "-h", "--help":
 		usage(out)
 		return nil
@@ -80,6 +82,7 @@ Commands:
   score         --option O --criterion C --value V <file>
   rank          <file>                                 print the ranking
   show          <file>                                 print current state
+  serve         [--addr :8080] [--dir .] [--owner local]  serve the web UI + API
 
 Discipline: weights are declared and locked before any option is added, so a
 score can never bend a weight toward a favorite.
