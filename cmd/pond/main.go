@@ -73,7 +73,7 @@ func usage(out io.Writer) {
 
 Commands:
   new           --title T <file>                       create an open decision
-  add-criterion --name N [--weight W] [--cost] [--range LO,HI] <file>
+  add-criterion --name N [--weight W] [--cost] [--allocation] [--range LO,HI] <file>
   set-weight    --name N --weight W <file>             adjust a weight (pre-lock)
   lock          <file>                                 freeze criteria & weights
   add-option    --name N <file>                        add an alternative (post-lock)
@@ -135,6 +135,7 @@ func cmdAddCriterion(args []string) error {
 	name := fs.String("name", "", "criterion name (required)")
 	weight := fs.Float64("weight", 1.0, "relative weight (> 0)")
 	cost := fs.Bool("cost", false, "higher value is worse (subtractive)")
+	alloc := fs.Bool("allocation", false, "scores are soma-100 shares distributed across options")
 	rangeSpec := fs.String("range", "0,100", "normalization anchors: LO,HI where each is a number, min, or max")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -153,10 +154,11 @@ func cmdAddCriterion(args []string) error {
 	}
 	return edit(path, func(d *pondera.Decision) error {
 		return d.AddCriterion(pondera.Criterion{
-			Name:      *name,
-			Weight:    *weight,
-			Direction: dir,
-			Range:     rng,
+			Name:       *name,
+			Weight:     *weight,
+			Direction:  dir,
+			Range:      rng,
+			Allocation: *alloc,
 		})
 	})
 }
