@@ -115,6 +115,90 @@ func TestHandlerScopesToInjectedOwner(t *testing.T) {
 	}
 }
 
+// TestRankEndpoint is the fatia-4 API contract the SPA consumes: GET
+// /decisions/{title}/rank returns the owner's decision ranked most- to
+// least-desirable, reusing the Go engine as the single source of truth rather
+// than re-implementing the weighted sum in the browser. It is owner-scoped like
+// the read endpoints, a missing title is 404, and a decision that exists but is
+// not yet rankable (an option missing a score) is a 422 carrying the reason so
+// the UI can tell the decider what to fix — not a 500 and not a silent empty
+// ranking.
+func TestRankEndpoint(t *testing.T) {
+	store := pondera.NewFileStore(t.TempDir())
+	h := server.New(store, server.OwnerFromHeader("X-Pondera-Owner"))
+
+	// A rankable decision: safety outweighs price, so the safer option wins even
+	// though it is pricier — the ranking must reflect the weighted engine, not
+	// input order.
+	rankable := pondera.Decision{
+		Title: "buy-car",
+		Owner: "alice",
+		Criteria: []pondera.Criterion{
+			{Name: "safety", Weight: 3},
+			{Name: "price", Weight: 1, Direction: pondera.Cost},
+		},
+		Options: []pondera.Option{
+			{Name: "cheap", Scores: map[string]float64{"safety": 40, "price": 20}},
+			{Name: "safe", Scores: map[string]float64{"safety": 90, "price": 80}},
+		},
+	}
+	if err := store.Save(rankable); err != nil {
+		t.Fatalf("seeding rankable decision: %v", err)
+	}
+
+	rec := get(h, "/decisions/buy-car/rank", "alice")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET rank as alice: status %d, want 200; body %q", rec.Code, rec.Body.String())
+	}
+	var results []pondera.Result
+	if err := json.Unmarshal(rec.Body.Bytes(), &results); err != nil {
+		t.Fatalf("decoding rank body %q: %v", rec.Body.String(), err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("rank returned %d results, want 2", len(results))
+	}
+	if results[0].Option != "safe" {
+		t.Fatalf("top-ranked option = %q, want safe (weighted engine, not input order)", results[0].Option)
+	}
+	if !(results[0].Score > results[1].Score) {
+		t.Fatalf("ranking not ordered: %v", results)
+	}
+
+	// Owner-scoping: bob cannot rank alice's decision even knowing the title.
+	if r := get(h, "/decisions/buy-car/rank", "bob"); r.Code != http.StatusNotFound {
+		t.Fatalf("rank alice's decision as bob: status %d, want 404", r.Code)
+	}
+
+	// A missing title is a 404, same as the read endpoints.
+	if r := get(h, "/decisions/nope/rank", "alice"); r.Code != http.StatusNotFound {
+		t.Fatalf("rank missing decision: status %d, want 404", r.Code)
+	}
+
+	// No injected owner: rejected, never served globally.
+	if r := get(h, "/decisions/buy-car/rank", ""); r.Code != http.StatusUnauthorized {
+		t.Fatalf("rank with no owner: status %d, want 401", r.Code)
+	}
+
+	// A decision that exists but is not rankable — an option missing a score —
+	// is a 422 carrying the engine's reason, not a 500 and not an empty 200.
+	unrankable := pondera.Decision{
+		Title:    "half-built",
+		Owner:    "alice",
+		Criteria: []pondera.Criterion{{Name: "safety", Weight: 1}, {Name: "price", Weight: 1}},
+		Options:  []pondera.Option{{Name: "a", Scores: map[string]float64{"safety": 80}}},
+	}
+	if err := store.Save(unrankable); err != nil {
+		t.Fatalf("seeding unrankable decision: %v", err)
+	}
+	r := get(h, "/decisions/half-built/rank", "alice")
+	if r.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("rank unrankable decision: status %d, want 422; body %q", r.Code, r.Body.String())
+	}
+	if !strings.Contains(r.Body.String(), "price") {
+		t.Fatalf("422 body %q does not name the missing criterion the decider must fix", r.Body.String())
+	}
+}
+
 // bodyFor renders a JSON POST body for a decision, letting the test set the
 // owner field to something OTHER than the authenticated caller — the whole
 // point is proving the server ignores it.

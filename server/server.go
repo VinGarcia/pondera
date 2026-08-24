@@ -46,6 +46,7 @@ func New(store pondera.Store, ownerFn OwnerFunc) *Handler {
 	mux.HandleFunc("GET /decisions", h.list)
 	mux.HandleFunc("POST /decisions", h.create)
 	mux.HandleFunc("GET /decisions/{title}", h.get)
+	mux.HandleFunc("GET /decisions/{title}/rank", h.rank)
 	h.mux = mux
 	return h
 }
@@ -101,6 +102,34 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, d)
+}
+
+// rank serves GET /decisions/{title}/rank: the injected owner's decision ranked
+// most- to least-desirable by the engine, so the SPA renders the ranking from
+// the single source of truth instead of re-implementing the weighted sum. A
+// title the owner does not own is a 404 (same as get). A decision that loads but
+// cannot be ranked yet — an option missing a score, no criteria, a bad weight —
+// is a 422 carrying the engine's reason, a user-fixable state, not a 500.
+func (h *Handler) rank(w http.ResponseWriter, r *http.Request) {
+	owner, ok := h.owner(w, r)
+	if !ok {
+		return
+	}
+	d, err := h.store.Load(owner, r.PathValue("title"))
+	if errors.Is(err, pondera.ErrNotFound) {
+		http.Error(w, "decision not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, "loading decision", http.StatusInternalServerError)
+		return
+	}
+	results, err := d.Rank()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		return
+	}
+	writeJSON(w, results)
 }
 
 // create serves POST /decisions: it saves the decision in the request body
