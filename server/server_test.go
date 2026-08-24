@@ -119,11 +119,17 @@ func TestHandlerScopesToInjectedOwner(t *testing.T) {
 // owner field to something OTHER than the authenticated caller — the whole
 // point is proving the server ignores it.
 func bodyFor(title, bodyOwner string) string {
+	return bodyScored(title, bodyOwner, 80)
+}
+
+// bodyScored is bodyFor with a caller-chosen score, so a test can tell a first
+// write apart from a would-be overwrite by reading the score back.
+func bodyScored(title, bodyOwner string, score float64) string {
 	d := pondera.Decision{
 		Title:    title,
 		Owner:    bodyOwner,
 		Criteria: []pondera.Criterion{{Name: "safety", Weight: 1}},
-		Options:  []pondera.Option{{Name: "a", Scores: map[string]float64{"safety": 80}}},
+		Options:  []pondera.Option{{Name: "a", Scores: map[string]float64{"safety": score}}},
 	}
 	b, err := json.Marshal(d)
 	if err != nil {
@@ -178,5 +184,42 @@ func TestCreateScopesToInjectedOwner(t *testing.T) {
 	// Malformed JSON is a client error too.
 	if r := post(h, "/decisions", "alice", "{not json"); r.Code != http.StatusBadRequest {
 		t.Fatalf("POST with malformed JSON: status %d, want 400", r.Code)
+	}
+}
+
+// TestCreateRejectsDuplicateTitle is the fatia-3b debt fix: POST creates, it
+// does not silently overwrite. A second POST to a title the owner already owns
+// is a 409 Conflict and the stored decision is left untouched — no data loss.
+// The conflict is owner-scoped, so a different owner may hold the same title
+// without collision.
+func TestCreateRejectsDuplicateTitle(t *testing.T) {
+	store := pondera.NewFileStore(t.TempDir())
+	h := server.New(store, server.OwnerFromHeader("X-Pondera-Owner"))
+
+	// First write for alice succeeds and records safety score 80.
+	if r := post(h, "/decisions", "alice", bodyScored("buy-car", "alice", 80)); r.Code != http.StatusCreated {
+		t.Fatalf("first POST: status %d, want 201; body %q", r.Code, r.Body.String())
+	}
+
+	// Second POST to the same title is refused with 409, not another 201.
+	if r := post(h, "/decisions", "alice", bodyScored("buy-car", "alice", 30)); r.Code != http.StatusConflict {
+		t.Fatalf("duplicate POST: status %d, want 409; body %q", r.Code, r.Body.String())
+	}
+
+	// The rejected write must not have clobbered the original — the score is
+	// still 80, proving the 409 protected existing data rather than merely
+	// returning a different status after overwriting.
+	got, err := store.Load("alice", "buy-car")
+	if err != nil {
+		t.Fatalf("loading after rejected duplicate: %v", err)
+	}
+	if s := got.Options[0].Scores["safety"]; s != 80 {
+		t.Fatalf("stored safety score = %v, want 80 (rejected write must not overwrite)", s)
+	}
+
+	// The conflict is owner-scoped: bob may create HIS own "buy-car" — a global
+	// title index would wrongly reject this.
+	if r := post(h, "/decisions", "bob", bodyScored("buy-car", "bob", 50)); r.Code != http.StatusCreated {
+		t.Fatalf("bob's same-title POST: status %d, want 201 (conflict must be owner-scoped)", r.Code)
 	}
 }

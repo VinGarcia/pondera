@@ -125,6 +125,18 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	// The host authenticated the caller; that identity — not the body — owns the
 	// decision. Overwriting here is the security boundary, not a convenience.
 	d.Owner = owner
+	// POST creates; it must not silently overwrite. If the owner already holds a
+	// decision under this title, refuse with 409 rather than clobbering it — an
+	// update is a different, explicit operation. The lookup is owner-scoped, so a
+	// title another owner holds does not collide. (There is a check-then-save
+	// TOCTOU window; acceptable for the single-host FileStore, logged as a debt.)
+	if _, err := h.store.Load(d.Owner, d.Title); err == nil {
+		http.Error(w, "decision already exists", http.StatusConflict)
+		return
+	} else if !errors.Is(err, pondera.ErrNotFound) {
+		http.Error(w, "checking for existing decision", http.StatusInternalServerError)
+		return
+	}
 	if err := h.store.Save(d); err != nil {
 		http.Error(w, "saving decision", http.StatusInternalServerError)
 		return
