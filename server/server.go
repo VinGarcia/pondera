@@ -44,6 +44,7 @@ func New(store pondera.Store, ownerFn OwnerFunc) *Handler {
 	h := &Handler{store: store, ownerFn: ownerFn}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /decisions", h.list)
+	mux.HandleFunc("POST /decisions", h.create)
 	mux.HandleFunc("GET /decisions/{title}", h.get)
 	h.mux = mux
 	return h
@@ -99,6 +100,36 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "loading decision", http.StatusInternalServerError)
 		return
 	}
+	writeJSON(w, d)
+}
+
+// create serves POST /decisions: it saves the decision in the request body
+// under the INJECTED owner. The owner named in the body is overwritten, never
+// trusted — an authenticated caller cannot persist a decision on another
+// owner's behalf by naming them in the payload. A missing title or malformed
+// body is a 400; a stored decision answers 201.
+func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
+	owner, ok := h.owner(w, r)
+	if !ok {
+		return
+	}
+	var d pondera.Decision
+	if err := json.NewDecoder(r.Body).Decode(&d); err != nil {
+		http.Error(w, "invalid decision body", http.StatusBadRequest)
+		return
+	}
+	if d.Title == "" {
+		http.Error(w, "decision has no title", http.StatusBadRequest)
+		return
+	}
+	// The host authenticated the caller; that identity — not the body — owns the
+	// decision. Overwriting here is the security boundary, not a convenience.
+	d.Owner = owner
+	if err := h.store.Save(d); err != nil {
+		http.Error(w, "saving decision", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusCreated)
 	writeJSON(w, d)
 }
 

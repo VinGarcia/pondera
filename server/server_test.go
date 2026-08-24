@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/sylgarcia00/pondera"
@@ -29,6 +30,18 @@ func seed(t *testing.T, store pondera.Store, owner, title string) {
 // owner is empty) and returns the response recorder.
 func get(h http.Handler, path, owner string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodGet, path, nil)
+	if owner != "" {
+		req.Header.Set("X-Pondera-Owner", owner)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+// post issues a POST to path with the given JSON body, setting the owner header
+// when owner is non-empty, and returns the response recorder.
+func post(h http.Handler, path, owner, body string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
 	if owner != "" {
 		req.Header.Set("X-Pondera-Owner", owner)
 	}
@@ -99,5 +112,71 @@ func TestHandlerScopesToInjectedOwner(t *testing.T) {
 	// refuses rather than serving a global or empty view.
 	if rec := get(h, "/decisions", ""); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("GET /decisions with no owner: status %d, want 401", rec.Code)
+	}
+}
+
+// bodyFor renders a JSON POST body for a decision, letting the test set the
+// owner field to something OTHER than the authenticated caller — the whole
+// point is proving the server ignores it.
+func bodyFor(title, bodyOwner string) string {
+	d := pondera.Decision{
+		Title:    title,
+		Owner:    bodyOwner,
+		Criteria: []pondera.Criterion{{Name: "safety", Weight: 1}},
+		Options:  []pondera.Option{{Name: "a", Scores: map[string]float64{"safety": 80}}},
+	}
+	b, err := json.Marshal(d)
+	if err != nil {
+		panic(err)
+	}
+	return string(b)
+}
+
+// TestCreateScopesToInjectedOwner is the fatia-3b behavior: POST /decisions
+// persists a decision under the INJECTED owner, never the owner named in the
+// body — so an authenticated caller cannot write a decision on someone else's
+// behalf by lying in the payload. It also rejects an unauthenticated write and
+// a body with no title, and refuses to invent an owner from the request.
+func TestCreateScopesToInjectedOwner(t *testing.T) {
+	store := pondera.NewFileStore(t.TempDir())
+	h := server.New(store, server.OwnerFromHeader("X-Pondera-Owner"))
+
+	// alice creates a decision whose BODY claims bob owns it. The injected owner
+	// (alice) must win: the decision is saved under alice, not bob.
+	rec := post(h, "/decisions", "alice", bodyFor("raise-ask", "bob"))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("POST /decisions as alice: status %d, want 201; body %q", rec.Code, rec.Body.String())
+	}
+
+	// The persisted decision belongs to alice, with the body's owner overridden.
+	got, err := store.Load("alice", "raise-ask")
+	if err != nil {
+		t.Fatalf("alice's decision was not saved under her: %v", err)
+	}
+	if got.Owner != "alice" {
+		t.Fatalf("saved owner = %q, want alice (body owner must be ignored)", got.Owner)
+	}
+	// bob must not have received the decision the body tried to attribute to him.
+	if _, err := store.Load("bob", "raise-ask"); err == nil {
+		t.Fatal("decision leaked to bob: body owner was trusted over the injected owner")
+	}
+	// And bob cannot read it over HTTP either.
+	if r := get(h, "/decisions/raise-ask", "bob"); r.Code != http.StatusNotFound {
+		t.Fatalf("GET alice's created decision as bob: status %d, want 404", r.Code)
+	}
+
+	// No injected owner: the write is refused, nothing is persisted.
+	if r := post(h, "/decisions", "", bodyFor("ghost", "")); r.Code != http.StatusUnauthorized {
+		t.Fatalf("POST with no owner: status %d, want 401", r.Code)
+	}
+
+	// A body with no title is a client error, not a 500 and not a silent save.
+	if r := post(h, "/decisions", "alice", bodyFor("", "alice")); r.Code != http.StatusBadRequest {
+		t.Fatalf("POST with empty title: status %d, want 400", r.Code)
+	}
+
+	// Malformed JSON is a client error too.
+	if r := post(h, "/decisions", "alice", "{not json"); r.Code != http.StatusBadRequest {
+		t.Fatalf("POST with malformed JSON: status %d, want 400", r.Code)
 	}
 }
