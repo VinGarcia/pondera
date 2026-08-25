@@ -42,7 +42,7 @@
     <!-- Ranking view: an existing decision opened from the list. -->
     <template v-if="chosen">
       <button @click="chosen = null">&larr; all decisions</button>
-      <h2>{{ chosen }}</h2>
+      <h2>{{ chosen }} <button @click="startEdit(chosen)">edit</button></h2>
       <p v-if="rankError" class="error">Can't rank yet: {{ rankError }}</p>
       <table v-else-if="ranking.length">
         <thead><tr><th>#</th><th>Option</th><th class="score">Score</th></tr></thead>
@@ -54,12 +54,12 @@
       </table>
     </template>
 
-    <!-- Creation view: build a decision, then POST it. -->
-    <template v-else-if="creating">
-      <button @click="creating = false">&larr; all decisions</button>
-      <h2>New decision</h2>
+    <!-- Editing view: build a decision, then POST (new) or PUT (existing) it. -->
+    <template v-else-if="editing">
+      <button @click="cancelEdit">&larr; all decisions</button>
+      <h2>{{ mode === 'edit' ? 'Edit ' + draft.title : 'New decision' }}</h2>
 
-      <div class="row">
+      <div class="row" v-if="mode !== 'edit'">
         <label>Title <input class="name" v-model="draft.title" placeholder="pick-laptop"></label>
       </div>
 
@@ -92,10 +92,10 @@
         <button @click="addOption">+ option</button>
       </fieldset>
 
-      <p v-if="createError" class="error">{{ createError }}</p>
+      <p v-if="saveError" class="error">{{ saveError }}</p>
       <div class="actions">
-        <button @click="create">Create decision</button>
-        <button @click="creating = false">Cancel</button>
+        <button @click="save">{{ mode === 'edit' ? 'Save & re-rank' : 'Create decision' }}</button>
+        <button @click="cancelEdit">Cancel</button>
       </div>
     </template>
 
@@ -121,7 +121,7 @@
       data() {
         return {
           decisions: [], chosen: null, ranking: [], loadError: '', rankError: '',
-          creating: false, draft: blankDraft(), createError: '',
+          editing: false, mode: 'create', draft: blankDraft(), saveError: '',
         };
       },
       async mounted() { await this.reload(); },
@@ -141,8 +141,28 @@
           this.ranking = await res.json();
         },
         startCreate() {
-          this.draft = blankDraft(); this.createError = ''; this.creating = true;
+          this.draft = blankDraft(); this.mode = 'create'; this.saveError = ''; this.editing = true;
         },
+        // startEdit loads the stored decision and reshapes it into the same draft
+        // the create form edits: Scores come back keyed by criterion NAME, but the
+        // form edits scores by row index, so remap by the criterion order. Opening
+        // this from the ranking view is the edit-and-re-rank loop's front door.
+        async startEdit(title) {
+          this.saveError = '';
+          const res = await fetch('decisions/' + encodeURIComponent(title));
+          if (!res.ok) { this.rankError = 'Could not load to edit: HTTP ' + res.status; return; }
+          const d = await res.json();
+          this.draft = {
+            title: d.Title,
+            criteria: (d.Criteria || []).map((c) => ({ name: c.Name, weight: c.Weight, direction: c.Direction })),
+            options: (d.Options || []).map((o) => ({
+              name: o.Name,
+              scores: (d.Criteria || []).reduce((acc, c, ci) => { acc[ci] = (o.Scores || {})[c.Name]; return acc; }, {}),
+            })),
+          };
+          this.mode = 'edit'; this.chosen = null; this.editing = true;
+        },
+        cancelEdit() { this.editing = false; },
         addCriterion() { this.draft.criteria.push({ name: '', weight: 1, direction: 'benefit' }); },
         removeCriterion(i) { this.draft.criteria.splice(i, 1); },
         addOption() { this.draft.options.push({ name: '', scores: {} }); },
@@ -168,16 +188,24 @@
             }),
           };
         },
-        async create() {
-          this.createError = '';
-          const res = await fetch('decisions', {
-            method: 'POST',
+        // save persists the draft: POST a new decision, or PUT an existing one when
+        // editing. Identity for a PUT is the title in the path, so the backend
+        // ignores the body's owner/title. After an edit we drop straight back into
+        // the ranking view for that decision, closing the tune-and-re-rank loop.
+        async save() {
+          this.saveError = '';
+          const editing = this.mode === 'edit';
+          const title = this.draft.title.trim();
+          const url = editing ? 'decisions/' + encodeURIComponent(title) : 'decisions';
+          const res = await fetch(url, {
+            method: editing ? 'PUT' : 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(this.build()),
           });
-          if (!res.ok) { this.createError = (await res.text()) || ('HTTP ' + res.status); return; }
-          this.creating = false;
+          if (!res.ok) { this.saveError = (await res.text()) || ('HTTP ' + res.status); return; }
+          this.editing = false;
           await this.reload();
+          if (editing) { await this.open(title); }
         },
       },
     }).mount('#app');

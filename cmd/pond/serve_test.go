@@ -93,7 +93,7 @@ func TestServeHandlerCreateDecisionThroughSPA(t *testing.T) {
 	if !strings.Contains(body, `@click="startCreate`) {
 		t.Fatalf("SPA shell has no create affordance (startCreate):\n%s", body)
 	}
-	if !strings.Contains(body, "method: 'POST'") || !strings.Contains(body, "fetch('decisions'") {
+	if !strings.Contains(body, "'POST'") || !strings.Contains(body, "fetch(url") {
 		t.Fatalf("SPA shell does not POST a new decision to decisions:\n%s", body)
 	}
 
@@ -136,6 +136,84 @@ func TestServeHandlerCreateDecisionThroughSPA(t *testing.T) {
 	}
 }
 
+// TestServeHandlerEditDecisionThroughSPA closes the demo loop Vini asked for: from
+// `pond serve` a person opens an existing decision, changes a weight, and sees the
+// ranking re-order — a decision tool is only useful if you can tune it. Two things
+// must hold together. First, the ranking view must host an edit affordance wired to
+// PUT /decisions/{title}; a page that can only read the frozen ranking cannot be
+// tuned. Second, the anti-sprint#28 guard: the exact JSON body the edit form builds,
+// PUT through the serve mux (not the server package in isolation), must replace the
+// stored decision and re-rank — proving the route the front calls exists and takes
+// what the front sends. The edit flips the dominant weight, so the winner changes:
+// a PUT that never reached Save(), or a rank that echoed the old file, would fail.
+func TestServeHandlerEditDecisionThroughSPA(t *testing.T) {
+	store := pondera.NewFileStore(t.TempDir())
+	// A decision whose winner is decided purely by which criterion carries the
+	// weight: quality leads for premium, price for budget. With quality heavier,
+	// premium wins.
+	seed := pondera.Decision{
+		Title: "pick-plan",
+		Owner: "local",
+		Criteria: []pondera.Criterion{
+			{Name: "quality", Weight: 3},
+			{Name: "price", Weight: 1},
+		},
+		Options: []pondera.Option{
+			{Name: "premium", Scores: map[string]float64{"quality": 100, "price": 0}},
+			{Name: "budget", Scores: map[string]float64{"quality": 0, "price": 100}},
+		},
+	}
+	if err := store.Save(seed); err != nil {
+		t.Fatalf("seeding: %v", err)
+	}
+	h := serveHandler(store, "local")
+
+	// The ranking view must carry an edit affordance pointed at the update route, or
+	// a demo decision can be read but never tuned.
+	body := httptestGet(h, "/").Body.String()
+	if !strings.Contains(body, `@click="startEdit`) {
+		t.Fatalf("SPA shell has no edit affordance (startEdit):\n%s", body)
+	}
+	if !strings.Contains(body, "'PUT'") {
+		t.Fatalf("SPA shell does not PUT an edited decision:\n%s", body)
+	}
+
+	// Before the edit, quality's weight dominates: premium ranks first.
+	rec := httptestGet(h, "/decisions/pick-plan/rank")
+	var ranked []pondera.Result
+	if err := json.Unmarshal(rec.Body.Bytes(), &ranked); err != nil {
+		t.Fatalf("pre-edit rank not JSON: %v (%s)", err, rec.Body.String())
+	}
+	if ranked[0].Option != "premium" {
+		t.Fatalf("pre-edit rank[0] = %q, want premium", ranked[0].Option)
+	}
+
+	// The body below is the exact shape the edit form builds (same build() as create):
+	// field names match the Go struct, Direction is its keyword, Scores keyed by name.
+	// The only change is the weights swapped — price now dominates. Identity comes
+	// from the path, so the body Title/Owner are ignored by the handler.
+	edited := `{"Title":"pick-plan",` +
+		`"Criteria":[{"Name":"quality","Weight":1,"Direction":"benefit"},` +
+		`{"Name":"price","Weight":3,"Direction":"benefit"}],` +
+		`"Options":[{"Name":"premium","Scores":{"quality":100,"price":0}},` +
+		`{"Name":"budget","Scores":{"quality":0,"price":100}}]}`
+
+	rec = httptestPut(h, "/decisions/pick-plan", edited)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT /decisions/pick-plan = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+
+	// After the edit, price's weight dominates: the ranking re-orders, budget wins.
+	// A stale rank or a PUT that never persisted would still show premium.
+	rec = httptestGet(h, "/decisions/pick-plan/rank")
+	if err := json.Unmarshal(rec.Body.Bytes(), &ranked); err != nil {
+		t.Fatalf("post-edit rank not JSON: %v (%s)", err, rec.Body.String())
+	}
+	if ranked[0].Option != "budget" {
+		t.Fatalf("post-edit rank[0] = %q, want budget (edit did not re-rank)", ranked[0].Option)
+	}
+}
+
 // seedRankable writes a two-option decision whose ranking has an unambiguous
 // winner, so the rank assertion proves the engine ran rather than echoing input.
 func seedRankable(t *testing.T, store pondera.Store, owner, title string) {
@@ -166,6 +244,14 @@ func httptestGet(h http.Handler, path string) *httptest.ResponseRecorder {
 
 func httptestPost(h http.Handler, path, body string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+func httptestPut(h http.Handler, path, body string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPut, path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
