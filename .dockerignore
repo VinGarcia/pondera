@@ -1,0 +1,4 @@
+# Keep the build context to source only: git history and local scratch data
+# never belong in the image and only slow the context upload.
+.git
+local/
