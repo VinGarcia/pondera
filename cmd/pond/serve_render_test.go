@@ -68,6 +68,61 @@ func TestServeHandlerRendersInBrowser(t *testing.T) {
 	}
 }
 
+// TestServeHandlerRendersRankingViewInBrowser closes the render debt runs #150–155
+// left open on the RANKING view: run #155 proved the list view boots, but the
+// score-bars view (the feature Vini cares about) only appears after a decision is
+// opened, which --dump-dom cannot click. A deep-link — the page loaded at
+// `/#<title>` opens that decision on mount — drives the same open()/rank code path
+// a click does, so headless Chrome can prove the ranking table, the eval360-style
+// bars, and the rendered fill widths are real DOM, not served template.
+func TestServeHandlerRendersRankingViewInBrowser(t *testing.T) {
+	store := pondera.NewFileStore(t.TempDir())
+	seedRankable(t, store, "local", "buy-car")
+	srv := httptest.NewServer(serveHandler(store, "local"))
+	defer srv.Close()
+
+	dom := chromeDumpDOM(t, srv.URL+"/#buy-car")
+
+	// The ranked options are in the DOM only if Vue mounted, followed the hash into
+	// open('buy-car'), fetched the rank, and rendered the reactive table.
+	for _, want := range []string{"safe-cheap", "risky-dear"} {
+		if !strings.Contains(dom, want) {
+			t.Fatalf("ranking DOM missing option %q (deep-link did not render the ranking):\n%s", want, dom)
+		}
+	}
+	// The eval360-style score bar: the track span and a fill whose width is the
+	// bound score. Both only exist once the ranking table rendered.
+	if !strings.Contains(dom, `class="bar"`) {
+		t.Fatalf("ranking DOM missing the score bar track (bars did not render):\n%s", dom)
+	}
+	if !strings.Contains(dom, "width:") || !strings.Contains(dom, "%") {
+		t.Fatalf("ranking DOM missing a bound fill width (:style did not evaluate):\n%s", dom)
+	}
+	if strings.Contains(dom, "{{") {
+		t.Fatalf("ranking DOM still has unresolved {{ }} mustaches (Vue did not mount):\n%s", dom)
+	}
+}
+
+// TestRankingRenderCheckIsLoadBearing is the ranking-specific non-vacuity bite:
+// the same server WITHOUT the hash lands on the list view, and the score-bar
+// assertions must NOT pass there — proving they distinguish a rendered ranking
+// from a rendered list, not merely "some DOM came back".
+func TestRankingRenderCheckIsLoadBearing(t *testing.T) {
+	store := pondera.NewFileStore(t.TempDir())
+	seedRankable(t, store, "local", "buy-car")
+	srv := httptest.NewServer(serveHandler(store, "local"))
+	defer srv.Close()
+
+	dom := chromeDumpDOM(t, srv.URL+"/") // no hash → list view, not ranking
+
+	if strings.Contains(dom, `class="bar"`) {
+		t.Fatalf("list view rendered a score bar without opening a decision — the ranking check is not load-bearing:\n%s", dom)
+	}
+	if strings.Contains(dom, "safe-cheap") {
+		t.Fatalf("list view rendered a ranked option without opening a decision — the ranking check is not load-bearing:\n%s", dom)
+	}
+}
+
 // TestBrowserRenderCheckIsLoadBearing is the non-vacuity bite: it points the same
 // two assertions at a deliberately broken page — the SPA shell served but the
 // Vue runtime route removed — and confirms the browser does NOT render it (the

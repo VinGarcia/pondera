@@ -46,7 +46,7 @@
 
     <!-- Ranking view: an existing decision opened from the list. -->
     <template v-if="chosen">
-      <button @click="chosen = null">&larr; all decisions</button>
+      <button @click="backToList">&larr; all decisions</button>
       <h2>{{ chosen }} <button @click="startEdit(chosen)">edit</button></h2>
       <p v-if="rankError" class="error">Can't rank yet: {{ rankError }}</p>
       <table v-else-if="ranking.length">
@@ -132,8 +132,25 @@
           editing: false, mode: 'create', draft: blankDraft(), saveError: '',
         };
       },
-      async mounted() { await this.reload(); },
+      async mounted() {
+        await this.reload();
+        // Deep-linking: the URL hash names the open decision, so a hash link boots
+        // straight into that ranking and browser back/forward move between the
+        // list and an open decision — a link a demo can share or bookmark.
+        window.addEventListener('hashchange', () => this.syncFromHash());
+        await this.syncFromHash();
+      },
       methods: {
+        // syncFromHash opens the decision named in the hash (empty hash → list).
+        // Guarded against re-opening what's already open, so setting the hash from
+        // open() below can't loop back into another fetch.
+        async syncFromHash() {
+          const title = decodeURIComponent(location.hash.replace(/^#/, ''));
+          if (!title) { this.chosen = null; return; }
+          if (this.editing || this.chosen === title) return;
+          await this.open(title, true);
+        },
+        backToList() { this.chosen = null; if (location.hash) location.hash = ''; },
         async reload() {
           try {
             const res = await fetch('decisions');
@@ -141,8 +158,9 @@
             this.decisions = await res.json();
           } catch (e) { this.loadError = 'Could not load decisions: ' + e.message; }
         },
-        async open(title) {
+        async open(title, fromHash) {
           this.chosen = title; this.ranking = []; this.rankError = '';
+          if (!fromHash) location.hash = encodeURIComponent(title);
           const res = await fetch('decisions/' + encodeURIComponent(title) + '/rank');
           if (res.status === 422) { this.rankError = await res.text(); return; }
           if (!res.ok) { this.rankError = 'HTTP ' + res.status; return; }
