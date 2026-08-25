@@ -10,6 +10,7 @@
 package pondera
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"sort"
@@ -149,13 +150,13 @@ func (r Range) String() string {
 	return "[" + lo.String() + ", " + hi.String() + "]"
 }
 
-// UnmarshalTOML decodes a two-element TOML array whose entries are numbers or
-// the keywords "min"/"max", rejecting anything else so a typo in a hand-edited
-// file fails loudly.
-func (r *Range) UnmarshalTOML(v interface{}) error {
-	list, ok := v.([]interface{})
-	if !ok || len(list) != 2 {
-		return fmt.Errorf("pondera: range must be a two-element array like [0, 100], got %v", v)
+// fromList decodes a two-element anchor array (numbers or the keywords
+// "min"/"max"), rejecting anything else so a typo in a hand-edited file or an
+// API payload fails loudly. It is shared by the TOML and JSON decoders, which
+// both hand it a []interface{} of numbers and strings.
+func (r *Range) fromList(list []interface{}) error {
+	if len(list) != 2 {
+		return fmt.Errorf("pondera: range must be a two-element array like [0, 100], got %v", list)
 	}
 	parse := func(e interface{}) (Anchor, error) {
 		switch x := e.(type) {
@@ -184,11 +185,54 @@ func (r *Range) UnmarshalTOML(v interface{}) error {
 	return nil
 }
 
+// UnmarshalTOML decodes a two-element TOML array whose entries are numbers or
+// the keywords "min"/"max", rejecting anything else so a typo in a hand-edited
+// file fails loudly.
+func (r *Range) UnmarshalTOML(v interface{}) error {
+	list, ok := v.([]interface{})
+	if !ok {
+		return fmt.Errorf("pondera: range must be a two-element array like [0, 100], got %v", v)
+	}
+	return r.fromList(list)
+}
+
 // MarshalTOML renders the range as its array form; an unset range is written
 // out as the explicit default [0, 100], so a saved file always shows the
 // anchors in effect.
 func (r Range) MarshalTOML() ([]byte, error) {
 	return []byte(r.String()), nil
+}
+
+// jsonValue returns the anchor as it appears inside a JSON array: a bare number
+// for a fixed anchor, or the "min"/"max" keyword string for a dynamic one.
+func (a Anchor) jsonValue() interface{} {
+	if a.keyword != "" {
+		return a.keyword
+	}
+	return a.value
+}
+
+// MarshalJSON renders the range as its two-element array — the same shape TOML
+// uses — so the HTTP/JSON API round-trips it. Without this the struct's fields
+// are unexported and it would serialize as an empty object, hiding the range
+// from the SPA. An unset range writes the explicit default [0, 100].
+func (r Range) MarshalJSON() ([]byte, error) {
+	lo, hi := r.anchors()
+	return json.Marshal([]interface{}{lo.jsonValue(), hi.jsonValue()})
+}
+
+// UnmarshalJSON decodes the two-element array form the SPA sends. A JSON null or
+// an absent field leaves the range unset (the [0, 100] default), so a client
+// that never touches the range does not have to send one.
+func (r *Range) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		return nil
+	}
+	var list []interface{}
+	if err := json.Unmarshal(data, &list); err != nil {
+		return fmt.Errorf("pondera: range must be a two-element JSON array like [0, 100]: %w", err)
+	}
+	return r.fromList(list)
 }
 
 // Criterion is one weighted value the decision is scored against.
