@@ -11,12 +11,16 @@ import (
 	"github.com/sylgarcia00/pondera/server"
 )
 
-// spaIndex is the single-file Vue SPA, embedded so `pond serve` ships as one
-// binary with no build step or asset directory to lose — the whole point of a
-// CDN-Vue single file for a desktop family demo.
+// spaIndex is the single-file Vue SPA and vueRuntime is the Vue library it loads,
+// both embedded so `pond serve` ships as one binary with no build step, no asset
+// directory to lose, and no CDN to be unreachable at demo time — the whole app
+// boots with no network on a desktop family machine.
 //
 //go:embed web/index.html
 var spaIndex []byte
+
+//go:embed web/vue.global.prod.js
+var vueRuntime []byte
 
 // serveHandler builds the http.Handler `pond serve` puts in front of the
 // browser: the embedded SPA at the root and the decision API on the same origin,
@@ -34,6 +38,13 @@ func serveHandler(store pondera.Store, owner string) http.Handler {
 	// to it, so registering the same handler on the prefixes is enough.
 	mux.Handle("/decisions", api)
 	mux.Handle("/decisions/", api)
+	// The Vue runtime the shell loads, served from the same origin so the page has
+	// no off-site dependency. Explicit route (not a FileServer) keeps the served
+	// surface to exactly the two embedded files.
+	mux.HandleFunc("GET /vue.global.prod.js", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		_, _ = w.Write(vueRuntime)
+	})
 	// Everything else is the SPA shell. {$} matches only the exact root so the
 	// API prefixes above take precedence; the shell drives all navigation
 	// client-side from there.

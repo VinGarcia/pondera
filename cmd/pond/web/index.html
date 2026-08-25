@@ -4,9 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>pondera — rank options by weighted values</title>
-  <!-- Vue 3 from a CDN: the whole SPA is this one embedded file, no build step,
-       so `pond serve` is all a family-demo machine needs. -->
-  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <!-- Vue 3 vendored and served from the same origin (see serve.go): the whole SPA
+       ships in the one binary, no build step and no CDN, so `pond serve` boots with
+       no network — all a family-demo machine needs. -->
+  <script src="vue.global.prod.js"></script>
   <style>
     :root { color-scheme: light dark; }
     body { font-family: system-ui, sans-serif; max-width: 42rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }

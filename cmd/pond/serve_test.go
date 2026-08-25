@@ -23,7 +23,7 @@ func TestServeHandlerServesSPAAndAPI(t *testing.T) {
 
 	h := serveHandler(store, "local")
 
-	// The root serves the SPA shell: a Vue mount point and the CDN runtime, so
+	// The root serves the SPA shell: a Vue mount point and the embedded runtime, so
 	// opening the page in a browser boots the app with no build toolchain.
 	rec := httptestGet(h, "/")
 	if rec.Code != http.StatusOK {
@@ -236,6 +236,41 @@ func TestServeHandlerRanksWithScoreBars(t *testing.T) {
 	// number for the exact value.
 	if !strings.Contains(body, "r.Score.toFixed(2)") {
 		t.Fatalf("ranking view dropped the numeric score:\n%s", body)
+	}
+}
+
+// TestServeHandlerServesVueLocallyNotFromCDN guards the whole point of the
+// embedded single-file demo: `pond serve` must boot the SPA with no network. Vini
+// reviewed the page and the JS did not load — a CDN <script> is a live dependency
+// on unpkg being reachable at demo time, which contradicts the "one binary, all a
+// family-demo machine needs" promise in serve.go. Two things must hold. First, the
+// served shell must not pull its runtime from an off-site CDN (no external http
+// URL), or the demo dies whenever the network does. Second, the Vue runtime must
+// be served by the handler itself, from the same origin — a real 200 with a
+// JavaScript body carrying Vue's createApp, proving the runtime ships in the
+// binary rather than being fetched from the internet.
+func TestServeHandlerServesVueLocallyNotFromCDN(t *testing.T) {
+	h := serveHandler(pondera.NewFileStore(t.TempDir()), "local")
+
+	body := httptestGet(h, "/").Body.String()
+	// No off-site script source: an http(s):// URL in the shell means the demo
+	// depends on a third party being up. The runtime must be same-origin.
+	for _, cdn := range []string{"unpkg.com", "cdn.jsdelivr", "https://", "http://"} {
+		if strings.Contains(body, cdn) {
+			t.Fatalf("SPA shell still references an off-site source %q — the demo must be self-contained:\n%s", cdn, body)
+		}
+	}
+
+	// The Vue runtime is served by the handler on the same origin, in the binary.
+	rec := httptestGet(h, "/vue.global.prod.js")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /vue.global.prod.js = %d, want 200 (runtime not embedded/served)", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "javascript") {
+		t.Fatalf("vue runtime content-type = %q, want a javascript type", ct)
+	}
+	if js := rec.Body.String(); !strings.Contains(js, "createApp") {
+		t.Fatalf("served vue runtime does not look like Vue (no createApp), got %d bytes", len(js))
 	}
 }
 
