@@ -100,11 +100,11 @@ func TestServeHandlerCreateDecisionThroughSPA(t *testing.T) {
 	// The body below is the exact JSON shape the form assembles: field names match
 	// the Go struct (Direction serializes as its keyword), Scores keyed by criterion
 	// name. If this shape drifts from what the form sends, the demo breaks silently.
-	newDecision := `{"Title":"pick-laptop",` +
-		`"Criteria":[{"Name":"battery","Weight":3,"Direction":"benefit"},` +
-		`{"Name":"price","Weight":2,"Direction":"cost"}],` +
-		`"Options":[{"Name":"light","Scores":{"battery":90,"price":50}},` +
-		`{"Name":"cheap","Scores":{"battery":60,"price":10}}]}`
+	newDecision := `{"title":"pick-laptop",` +
+		`"criteria":[{"name":"battery","weight":3,"direction":"benefit"},` +
+		`{"name":"price","weight":2,"direction":"cost"}],` +
+		`"options":[{"name":"light","scores":{"battery":90,"price":50}},` +
+		`{"name":"cheap","scores":{"battery":60,"price":10}}]}`
 
 	rec := httptestPost(h, "/decisions", newDecision)
 	if rec.Code != http.StatusCreated {
@@ -192,11 +192,11 @@ func TestServeHandlerEditDecisionThroughSPA(t *testing.T) {
 	// field names match the Go struct, Direction is its keyword, Scores keyed by name.
 	// The only change is the weights swapped — price now dominates. Identity comes
 	// from the path, so the body Title/Owner are ignored by the handler.
-	edited := `{"Title":"pick-plan",` +
-		`"Criteria":[{"Name":"quality","Weight":1,"Direction":"benefit"},` +
-		`{"Name":"price","Weight":3,"Direction":"benefit"}],` +
-		`"Options":[{"Name":"premium","Scores":{"quality":100,"price":0}},` +
-		`{"Name":"budget","Scores":{"quality":0,"price":100}}]}`
+	edited := `{"title":"pick-plan",` +
+		`"criteria":[{"name":"quality","weight":1,"direction":"benefit"},` +
+		`{"name":"price","weight":3,"direction":"benefit"}],` +
+		`"options":[{"name":"premium","scores":{"quality":100,"price":0}},` +
+		`{"name":"budget","scores":{"quality":0,"price":100}}]}`
 
 	rec = httptestPut(h, "/decisions/pick-plan", edited)
 	if rec.Code != http.StatusOK {
@@ -227,9 +227,9 @@ func TestServeHandlerRangeRoundTripsThroughSPA(t *testing.T) {
 	h := serveHandler(store, "local")
 
 	// Exactly the shape build() emits, now including the Range anchor array.
-	create := `{"Title":"one-cost",` +
-		`"Criteria":[{"Name":"price","Weight":1,"Direction":"cost","Range":[0,100]}],` +
-		`"Options":[{"Name":"only","Scores":{"price":40}}]}`
+	create := `{"title":"one-cost",` +
+		`"criteria":[{"name":"price","weight":1,"direction":"cost","range":[0,100]}],` +
+		`"options":[{"name":"only","scores":{"price":40}}]}`
 	if rec := httptestPost(h, "/decisions", create); rec.Code != http.StatusCreated {
 		t.Fatalf("POST /decisions = %d, want 201 (body %s)", rec.Code, rec.Body.String())
 	}
@@ -251,9 +251,9 @@ func TestServeHandlerRangeRoundTripsThroughSPA(t *testing.T) {
 
 	// Retune only the range to [0, "max"]; the score must change, proving the range
 	// reached Rank() rather than being accepted and dropped.
-	retuned := `{"Title":"one-cost",` +
-		`"Criteria":[{"Name":"price","Weight":1,"Direction":"cost","Range":[0,"max"]}],` +
-		`"Options":[{"Name":"only","Scores":{"price":40}}]}`
+	retuned := `{"title":"one-cost",` +
+		`"criteria":[{"name":"price","weight":1,"direction":"cost","range":[0,"max"]}],` +
+		`"options":[{"name":"only","scores":{"price":40}}]}`
 	if rec := httptestPut(h, "/decisions/one-cost", retuned); rec.Code != http.StatusOK {
 		t.Fatalf("PUT /decisions/one-cost = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 	}
@@ -294,13 +294,13 @@ func TestServeHandlerRanksWithScoreBars(t *testing.T) {
 
 	body := httptestGet(h, "/").Body.String()
 	// The bar fill must be driven by the score, not a fixed width — the visual gap
-	// between options is the whole point, so the width has to track r.Score.
-	if !strings.Contains(body, "r.Score + '%'") {
-		t.Fatalf("ranking view has no score-driven bar (width bound to r.Score):\n%s", body)
+	// between options is the whole point, so the width has to track r.score.
+	if !strings.Contains(body, "r.score + '%'") {
+		t.Fatalf("ranking view has no score-driven bar (width bound to r.score):\n%s", body)
 	}
 	// The numeric score stays alongside the bar: the picture is for scanning, the
 	// number for the exact value.
-	if !strings.Contains(body, "r.Score.toFixed(2)") {
+	if !strings.Contains(body, "r.score.toFixed(2)") {
 		t.Fatalf("ranking view dropped the numeric score:\n%s", body)
 	}
 }

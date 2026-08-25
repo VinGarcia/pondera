@@ -160,10 +160,10 @@
       <table v-else-if="ranking.length">
         <thead><tr><th>#</th><th>Option</th><th class="score">Score</th></tr></thead>
         <tbody>
-          <tr v-for="(r, i) in ranking" :key="r.Option">
-            <td class="rankno">{{ i + 1 }}</td><td>{{ r.Option }}</td>
+          <tr v-for="(r, i) in ranking" :key="r.option">
+            <td class="rankno">{{ i + 1 }}</td><td>{{ r.option }}</td>
             <td class="score">
-              <span class="bar"><span :style="{ width: r.Score + '%' }"></span></span>{{ r.Score.toFixed(2) }}
+              <span class="bar"><span :style="{ width: r.score + '%' }"></span></span>{{ r.score.toFixed(2) }}
             </td>
           </tr>
         </tbody>
@@ -328,14 +328,14 @@
           if (!res.ok) { this.rankError = 'Could not load to edit: HTTP ' + res.status; return; }
           const d = await res.json();
           this.draft = {
-            title: d.Title,
-            criteria: (d.Criteria || []).map((c) => ({
-              name: c.Name, weight: c.Weight, direction: c.Direction,
-              range: Array.isArray(c.Range) ? c.Range.slice() : [0, 100],
+            title: d.title,
+            criteria: (d.criteria || []).map((c) => ({
+              name: c.name, weight: c.weight, direction: c.direction,
+              range: Array.isArray(c.range) ? c.range.slice() : [0, 100],
             })),
-            options: (d.Options || []).map((o) => ({
-              name: o.Name,
-              scores: (d.Criteria || []).reduce((acc, c, ci) => { acc[ci] = (o.Scores || {})[c.Name]; return acc; }, {}),
+            options: (d.options || []).map((o) => ({
+              name: o.name,
+              scores: (d.criteria || []).reduce((acc, c, ci) => { acc[ci] = (o.scores || {})[c.name]; return acc; }, {}),
             })),
           };
           // Stored weights are raw (any positive numbers); rescale them to shares
@@ -479,21 +479,21 @@
           e.preventDefault();
         },
         // build assembles the exact Decision JSON the backend decodes: field names
-        // match the Go struct, Direction is its keyword, Range is the two-element
-        // anchor array (numbers stay numbers, the "min"/"max" keywords stay strings),
-        // and Scores is keyed by criterion NAME (the form edits scores by row index,
-        // so remap here).
+        // match the Go struct's json tags (camelCase), direction is its keyword,
+        // range is the two-element anchor array (numbers stay numbers, the
+        // "min"/"max" keywords stay strings), and scores is keyed by criterion NAME
+        // (the form edits scores by row index, so remap here).
         build() {
           return {
-            Title: this.draft.title.trim(),
-            Criteria: this.draft.criteria.map((c) => ({
-              Name: c.name.trim(), Weight: Number(c.weight) || 0, Direction: c.direction,
-              Range: c.range.map((a) => (a === 'min' || a === 'max' ? a : Number(a))),
+            title: this.draft.title.trim(),
+            criteria: this.draft.criteria.map((c) => ({
+              name: c.name.trim(), weight: Number(c.weight) || 0, direction: c.direction,
+              range: c.range.map((a) => (a === 'min' || a === 'max' ? a : Number(a))),
             })),
-            Options: this.draft.options.map((o) => {
+            options: this.draft.options.map((o) => {
               const scores = {};
               this.draft.criteria.forEach((c, ci) => { scores[c.name.trim()] = Number(o.scores[ci]) || 0; });
-              return { Name: o.name.trim(), Scores: scores };
+              return { name: o.name.trim(), scores: scores };
             }),
           };
         },

@@ -237,46 +237,46 @@ func (r *Range) UnmarshalJSON(data []byte) error {
 
 // Criterion is one weighted value the decision is scored against.
 type Criterion struct {
-	Name      string    `toml:"name"`
-	Weight    float64   `toml:"weight"` // must be > 0
-	Direction Direction `toml:"direction"`
+	Name      string    `toml:"name" json:"name"`
+	Weight    float64   `toml:"weight" json:"weight"` // must be > 0
+	Direction Direction `toml:"direction" json:"direction"`
 	// Range sets the normalization anchors; absent in TOML means [0, 100].
-	Range Range `toml:"range"`
+	Range Range `toml:"range" json:"range"`
 	// Allocation marks the scores as a distribution the decider hands out across
 	// the options — shares that must sum to 100, the soma-100 slider. It is
 	// mutually exclusive with a custom Range: a share is already a 0-100
 	// contribution under the default [0, 100], so pinning other anchors would
 	// contradict it. Off by default, keeping ordinary 0-100 scores unconstrained.
-	Allocation bool `toml:"allocation,omitempty"`
+	Allocation bool `toml:"allocation,omitempty" json:"allocation,omitempty"`
 }
 
 // Option is one alternative being ranked; Scores maps criterion name to the
 // option's value for that criterion (a 0-100 quality-% or a raw scalar,
 // depending on the criterion's range).
 type Option struct {
-	Name   string             `toml:"name"`
-	Scores map[string]float64 `toml:"scores"`
+	Name   string             `toml:"name" json:"name"`
+	Scores map[string]float64 `toml:"scores" json:"scores"`
 }
 
 // Decision is a single decider's weighted comparison of options.
 type Decision struct {
-	Title string `toml:"title"`
+	Title string `toml:"title" json:"title"`
 	// Owner is who the decision belongs to; it scopes a Store so one person's
 	// decisions never appear in another's list. Persisted from the start so the
 	// on-disk format never has to be migrated to add multi-owner support later.
-	Owner    string      `toml:"owner,omitempty"`
-	Criteria []Criterion `toml:"criteria"`
-	Options  []Option    `toml:"options"`
+	Owner    string      `toml:"owner,omitempty" json:"owner,omitempty"`
+	Criteria []Criterion `toml:"criteria" json:"criteria"`
+	Options  []Option    `toml:"options" json:"options"`
 	// LockedAt records when the criteria and weights were frozen. Its zero value
 	// means the decision is still open for criteria/weight edits and closed to
 	// options; see the builder methods in build.go for the ordering discipline.
-	LockedAt time.Time `toml:"locked_at,omitempty"`
+	LockedAt time.Time `toml:"locked_at,omitempty" json:"lockedAt,omitempty"`
 }
 
 // Result is one option's desirability index, in 0-100 (weights normalized).
 type Result struct {
-	Option string
-	Score  float64
+	Option string  `json:"option"`
+	Score  float64 `json:"score"`
 }
 
 // Rank computes each option's desirability and returns the options ordered from
