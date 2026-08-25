@@ -214,6 +214,31 @@ func TestServeHandlerEditDecisionThroughSPA(t *testing.T) {
 	}
 }
 
+// TestServeHandlerRanksWithScoreBars covers the fatia-4 demo polish Vini asked for
+// ("barras estilo eval360, bonito pra mostrar a leigos"): the ranking view must not
+// be a bare column of numbers — each option's score is drawn as a proportional bar,
+// the eval360 idiom, so a layperson reads the gap at a glance. The score index is
+// already normalized 0-100, so the bar fill is bound directly to the score as a
+// percentage width. A shell that only prints Score.toFixed(2) would fail the width
+// binding assertion; the numeric value stays too, so the exact figure is still there.
+func TestServeHandlerRanksWithScoreBars(t *testing.T) {
+	store := pondera.NewFileStore(t.TempDir())
+	seedRankable(t, store, "local", "buy-car")
+	h := serveHandler(store, "local")
+
+	body := httptestGet(h, "/").Body.String()
+	// The bar fill must be driven by the score, not a fixed width — the visual gap
+	// between options is the whole point, so the width has to track r.Score.
+	if !strings.Contains(body, "r.Score + '%'") {
+		t.Fatalf("ranking view has no score-driven bar (width bound to r.Score):\n%s", body)
+	}
+	// The numeric score stays alongside the bar: the picture is for scanning, the
+	// number for the exact value.
+	if !strings.Contains(body, "r.Score.toFixed(2)") {
+		t.Fatalf("ranking view dropped the numeric score:\n%s", body)
+	}
+}
+
 // seedRankable writes a two-option decision whose ranking has an unambiguous
 // winner, so the rank assertion proves the engine ran rather than echoing input.
 func seedRankable(t *testing.T, store pondera.Store, owner, title string) {

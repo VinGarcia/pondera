@@ -17,8 +17,12 @@
     a { cursor: pointer; text-decoration: underline; }
     table { border-collapse: collapse; width: 100%; margin-top: 0.5rem; }
     th, td { text-align: left; padding: 0.35rem 0.6rem; border-bottom: 1px solid #8884; }
-    td.score { text-align: right; font-variant-numeric: tabular-nums; }
+    td.score { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
     tr:first-child td { font-weight: 600; }
+    /* eval360-style score bar: a track with a fill whose width is the 0-100 score. */
+    .bar { display: inline-block; vertical-align: middle; width: 8rem; height: 0.7rem;
+           margin-right: 0.5rem; border-radius: 0.35rem; background: #8883; overflow: hidden; }
+    .bar > span { display: block; height: 100%; border-radius: 0.35rem; background: #3498db; }
     .muted { opacity: 0.6; }
     .error { color: #c0392b; }
     button { font: inherit; cursor: pointer; }
@@ -48,7 +52,10 @@
         <thead><tr><th>#</th><th>Option</th><th class="score">Score</th></tr></thead>
         <tbody>
           <tr v-for="(r, i) in ranking" :key="r.Option">
-            <td>{{ i + 1 }}</td><td>{{ r.Option }}</td><td class="score">{{ r.Score.toFixed(2) }}</td>
+            <td>{{ i + 1 }}</td><td>{{ r.Option }}</td>
+            <td class="score">
+              <span class="bar"><span :style="{ width: r.Score + '%' }"></span></span>{{ r.Score.toFixed(2) }}
+            </td>
           </tr>
         </tbody>
       </table>
