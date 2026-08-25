@@ -108,6 +108,9 @@
     /* Numeric fields size to their content (see numWidth) so a 6–7 digit value
        like 800000 shows in full; this min-width is the floor for short values. */
     input.num { min-width: 4.5rem; text-align: right; font-variant-numeric: tabular-nums; padding: 0.25rem 0.4rem; }
+    /* No spinner arrows: they eat digit space and ±1 stepping is covered by the drag bars. */
+    input.num { appearance: textfield; -moz-appearance: textfield; }
+    input.num::-webkit-outer-spin-button, input.num::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
     .row { display: flex; flex-wrap: wrap; gap: 0.55rem; align-items: center; margin: 0.5rem 0; }
     .crit-card, .opt-card {
       border: 1px solid var(--line); border-radius: 0.6rem; padding: 0.7rem 0.85rem;
