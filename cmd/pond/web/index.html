@@ -105,8 +105,9 @@
     }
     input:focus, select:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
     input.name { width: 9rem; }
-    input.num { width: 4.5rem; text-align: right; font-variant-numeric: tabular-nums; }
-    input.tiny { width: 3.6rem; text-align: right; font-variant-numeric: tabular-nums; padding: 0.25rem 0.35rem; }
+    /* Numeric fields size to their content (see numWidth) so a 6–7 digit value
+       like 800000 shows in full; this min-width is the floor for short values. */
+    input.num { min-width: 4.5rem; text-align: right; font-variant-numeric: tabular-nums; padding: 0.25rem 0.4rem; }
     .row { display: flex; flex-wrap: wrap; gap: 0.55rem; align-items: center; margin: 0.5rem 0; }
     .crit-card, .opt-card {
       border: 1px solid var(--line); border-radius: 0.6rem; padding: 0.7rem 0.85rem;
@@ -117,7 +118,7 @@
     .field > input, .field > select { font-size: 0.9rem; }
     .share { font-variant-numeric: tabular-nums; color: var(--accent); font-weight: 600; min-width: 2.6rem; }
     .opt-head { display: flex; align-items: center; gap: 0.55rem; margin-bottom: 0.5rem; }
-    .opt-crit { display: grid; grid-template-columns: 8rem 1fr 3.2rem; gap: 0.5rem 0.7rem; align-items: center; }
+    .opt-crit { display: grid; grid-template-columns: 8rem 1fr auto; gap: 0.5rem 0.7rem; align-items: center; }
     .opt-crit .cname { font-size: 0.85rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .opt-crit .val { font-variant-numeric: tabular-nums; text-align: right; font-size: 0.9rem; }
     .hint { font-size: 0.8rem; color: var(--muted); margin: 0.15rem 0 0.6rem; }
@@ -177,17 +178,17 @@
 
       <fieldset>
         <legend>Criteria</legend>
-        <p class="hint">Drag a weight bar to set how much a criterion matters; the share it carries is shown live. Each criterion maps its raw values onto 0–100 through its range.</p>
+        <p class="hint">Weights are shares that always add up to 100%: raise one and the others fall proportionally. Each criterion maps its raw values onto 0–100 through its range.</p>
         <div class="crit-card" v-for="(c, ci) in draft.criteria" :key="ci">
           <div class="crit-head">
             <input class="name" v-model="c.name" placeholder="battery">
             <div class="field">weight
-              <div class="dbar weightbar" @pointerdown="beginDrag($event, 0, weightMax, val => c.weight = val, 0.5)">
-                <div class="fill" :style="{ width: fillPct(c.weight, 0, weightMax) + '%' }"></div>
-                <div class="knob" :style="{ left: fillPct(c.weight, 0, weightMax) + '%' }"></div>
+              <div class="dbar weightbar" @pointerdown="beginDrag($event, 0, 100, val => setWeight(ci, val), 1)">
+                <div class="fill" :style="{ width: fillPct(c.weight, 0, 100) + '%' }"></div>
+                <div class="knob" :style="{ left: fillPct(c.weight, 0, 100) + '%' }"></div>
               </div>
             </div>
-            <label class="field">&nbsp;<input class="num" type="number" min="0" step="0.5" v-model.number="c.weight"></label>
+            <label class="field">&nbsp;<input class="num" type="number" min="0" max="100" step="1" v-model.number="c.weight" @change="setWeight(ci, c.weight)"></label>
             <select v-model="c.direction">
               <option value="benefit">higher is better</option>
               <option value="cost">lower is better</option>
@@ -198,7 +199,7 @@
           <div class="row">
             <span class="cname">range</span>
             <template v-for="ei in [0, 1]" :key="ei">
-              <input v-if="typeof c.range[ei] === 'number'" class="tiny" type="number" step="any" v-model.number="c.range[ei]">
+              <input v-if="typeof c.range[ei] === 'number'" class="num" type="number" step="any" :style="{ width: numWidth(c.range[ei]) }" v-model.number="c.range[ei]">
               <button v-else class="link small" @click="c.range[ei] = ei === 0 ? 0 : 100" :title="'dynamic anchor — click to set a number'">{{ c.range[ei] }} ✎</button>
               <span v-if="ei === 0" class="muted">–</span>
             </template>
@@ -223,7 +224,7 @@
                 <div class="fill" :style="{ width: fillPct(o.scores[ci], boundsFor(ci)[0], boundsFor(ci)[1]) + '%' }"></div>
                 <div class="knob" :style="{ left: fillPct(o.scores[ci], boundsFor(ci)[0], boundsFor(ci)[1]) + '%' }"></div>
               </div>
-              <input class="tiny val" type="number" step="any" v-model.number="o.scores[ci]">
+              <input class="num val" type="number" step="any" :style="{ width: numWidth(o.scores[ci]) }" v-model.number="o.scores[ci]" @change="o.scores[ci] = clampScore(ci, o.scores[ci])">
             </template>
           </div>
         </div>
@@ -250,12 +251,12 @@
 
   <script>
     const { createApp } = Vue;
-    // Weights are relative and unbounded; the drag bar needs a ceiling, so it
-    // spans 0–weightMax. Larger weights are still reachable through the number input.
-    const WEIGHT_MAX = 10;
+    // Weights are shares that always sum to 100: the drag bar and number input
+    // both span 0–100, and setWeight redistributes the rest proportionally, so
+    // "how much this criterion matters" reads directly as a percentage.
     const blankDraft = () => ({
       title: '',
-      criteria: [{ name: '', weight: 1, direction: 'benefit', range: [0, 100] }],
+      criteria: [{ name: '', weight: 100, direction: 'benefit', range: [0, 100] }],
       options: [{ name: '', scores: {} }],
     });
     createApp({
@@ -263,7 +264,6 @@
         return {
           decisions: [], chosen: null, ranking: [], loadError: '', rankError: '',
           editing: false, mode: 'create', draft: blankDraft(), saveError: '',
-          weightMax: WEIGHT_MAX,
         };
       },
       async mounted() {
@@ -335,17 +335,92 @@
               scores: (d.Criteria || []).reduce((acc, c, ci) => { acc[ci] = (o.Scores || {})[c.Name]; return acc; }, {}),
             })),
           };
+          // Stored weights are raw (any positive numbers); rescale them to shares
+          // summing to 100 so the tune view speaks percentages. Rank normalizes by
+          // the weight total anyway, so this preserves the decision's ranking.
+          this.normalizeWeights();
           this.mode = 'edit'; this.chosen = null; this.editing = true;
         },
         cancelEdit() { this.editing = false; },
-        addCriterion() { this.draft.criteria.push({ name: '', weight: 1, direction: 'benefit', range: [0, 100] }); },
-        removeCriterion(i) { this.draft.criteria.splice(i, 1); },
+        addCriterion() {
+          this.draft.criteria.push({ name: '', weight: 0, direction: 'benefit', range: [0, 100] });
+          // Give the newcomer an equal slice; the others shrink proportionally to keep the sum at 100.
+          this.setWeight(this.draft.criteria.length - 1, Math.round(100 / this.draft.criteria.length));
+        },
+        removeCriterion(i) { this.draft.criteria.splice(i, 1); this.normalizeWeights(); },
         addOption() { this.draft.options.push({ name: '', scores: {} }); },
         removeOption(i) { this.draft.options.splice(i, 1); },
         share(weight) {
           const total = this.draft.criteria.reduce((s, c) => s + (Number(c.weight) || 0), 0);
           if (total <= 0) return '—';
           return Math.round((Number(weight) || 0) / total * 100) + '%';
+        },
+        // setWeight sets criterion i's share to v (a whole-number 0–100) and rescales
+        // the other criteria so every weight still sums to exactly 100 — raise one and
+        // the rest fall proportionally. Shares are kept as integers (rounded to sum 100
+        // via largestRemainder) so the tune view reads as clean percentages. When the
+        // others are all zero it splits the remainder evenly, recovering from 100/0.
+        setWeight(i, raw) {
+          const crit = this.draft.criteria;
+          const n = crit.length;
+          let v = Math.round(Number(raw));
+          if (!(v >= 0)) v = 0;
+          if (v > 100) v = 100;
+          if (n === 1) { crit[0].weight = 100; return; }
+          const others = crit.map((c, j) => j).filter((j) => j !== i);
+          const target = 100 - v;
+          let oldOthers = 0;
+          others.forEach((j) => { oldOthers += Number(crit[j].weight) || 0; });
+          const floats = others.map((j) => (oldOthers > 0
+            ? (Number(crit[j].weight) || 0) * target / oldOthers
+            : target / others.length));
+          const rounded = this.largestRemainder(floats, target);
+          others.forEach((j, k) => { crit[j].weight = rounded[k]; });
+          crit[i].weight = v;
+        },
+        // normalizeWeights rescales every weight to integer shares summing to 100 while
+        // keeping their ratios — used when loading raw stored weights and after add/remove.
+        normalizeWeights() {
+          const crit = this.draft.criteria;
+          if (!crit.length) return;
+          const total = crit.reduce((s, c) => s + (Number(c.weight) || 0), 0);
+          const floats = total > 0
+            ? crit.map((c) => (Number(c.weight) || 0) / total * 100)
+            : crit.map(() => 100 / crit.length);
+          const rounded = this.largestRemainder(floats, 100);
+          crit.forEach((c, k) => { c.weight = rounded[k]; });
+        },
+        // largestRemainder rounds a list of fractional shares to integers that sum to
+        // exactly total: floor everyone, then hand the leftover units to the entries
+        // with the largest dropped fraction. This is what keeps the shares clean whole
+        // numbers without the rounding drifting the total off 100.
+        largestRemainder(vals, total) {
+          const floor = vals.map((v) => Math.floor(v));
+          const out = floor.slice();
+          let rem = Math.round(total - floor.reduce((a, b) => a + b, 0));
+          const order = vals
+            .map((v, idx) => ({ idx, frac: v - Math.floor(v) }))
+            .sort((a, b) => b.frac - a.frac);
+          for (let k = 0; k < rem && k < order.length; k++) out[order[k].idx]++;
+          return out;
+        },
+        // numWidth sizes a numeric field to its content so a 6–7 digit value (e.g.
+        // an 800000 price) shows in full, floored so short values aren't cramped.
+        numWidth(v) {
+          const s = (v === null || v === undefined || Number.isNaN(v)) ? '' : String(v);
+          return Math.min(11, Math.max(4, s.length + 1.5)) + 'ch';
+        },
+        // clampScore keeps a hand-typed score within its criterion's range. Only a
+        // FIXED anchor is a hard bound; a dynamic "min"/"max" anchor is defined by
+        // the data, so a value on that side is in-range by construction and passes.
+        clampScore(ci, v) {
+          let n = Number(v);
+          if (Number.isNaN(n)) return 0;
+          const raw = (this.draft.criteria[ci] && this.draft.criteria[ci].range) || [0, 100];
+          const lo = raw[0], hi = raw[1];
+          if (typeof lo === 'number' && n < lo) n = lo;
+          if (typeof hi === 'number' && n > hi) n = hi;
+          return n;
         },
         // boundsFor returns the numeric [lo, hi] a criterion's score bar spans.
         // Fixed anchors are used as-is; the keyword anchors "min"/"max" are resolved
@@ -421,8 +496,9 @@
         },
         // save persists the draft: POST a new decision, or PUT an existing one when
         // editing. Identity for a PUT is the title in the path, so the backend
-        // ignores the body's owner/title. After an edit we drop straight back into
-        // the ranking view for that decision, closing the tune-and-re-rank loop.
+        // ignores the body's owner/title. Either way we drop straight into the
+        // ranking view for that decision — a new decision opens to its ranking
+        // instead of dumping the user back on the list.
         async save() {
           this.saveError = '';
           const editing = this.mode === 'edit';
@@ -436,7 +512,7 @@
           if (!res.ok) { this.saveError = (await res.text()) || ('HTTP ' + res.status); return; }
           this.editing = false;
           await this.reload();
-          if (editing) { await this.open(title); }
+          await this.open(title);
         },
       },
     }).mount('#app');

@@ -154,6 +154,13 @@ func TestServeHandlerRendersEditViewInBrowser(t *testing.T) {
 	if !strings.Contains(dom, "max") {
 		t.Fatalf("edit DOM missing the criterion range keyword (range editor did not render):\n%s", dom)
 	}
+	// Numeric fields size to their content: the score/range inputs carry a bound
+	// inline `width: <n>ch` style so a wide value (the seeded price is 20000/40000)
+	// shows in full. The `ch;"` tail is an inline style attribute the static CSS
+	// never emits, so its presence proves numWidth's :style binding evaluated.
+	if !strings.Contains(dom, `ch;"`) {
+		t.Fatalf("edit DOM missing a content-sized numeric field (numWidth :style did not evaluate):\n%s", dom)
+	}
 	if strings.Contains(dom, "{{") {
 		t.Fatalf("edit DOM still has unresolved {{ }} mustaches (Vue did not mount):\n%s", dom)
 	}
