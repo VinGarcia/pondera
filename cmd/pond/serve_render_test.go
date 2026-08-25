@@ -123,6 +123,59 @@ func TestRankingRenderCheckIsLoadBearing(t *testing.T) {
 	}
 }
 
+// TestServeHandlerRendersEditViewInBrowser covers the tune view a click can't
+// reach under --dump-dom: the "edit:<title>" deep-link boots straight into the
+// edit form, so headless Chrome can prove the drag-to-set bars and the
+// per-criterion range editor are real rendered DOM. The seeded decision carries
+// both a default-range criterion (numeric min/max inputs) and a dynamic ["min",
+// "max"] one (keyword chips), so a render exercises both range branches.
+func TestServeHandlerRendersEditViewInBrowser(t *testing.T) {
+	store := pondera.NewFileStore(t.TempDir())
+	seedRankable(t, store, "local", "buy-car")
+	srv := httptest.NewServer(serveHandler(store, "local"))
+	defer srv.Close()
+
+	dom := chromeDumpDOM(t, srv.URL+"/#edit:buy-car")
+
+	// The criterion names appear only once startEdit fetched the decision and the
+	// edit form rendered its reactive rows.
+	for _, want := range []string{"safety", "price"} {
+		if !strings.Contains(dom, want) {
+			t.Fatalf("edit DOM missing criterion %q (edit deep-link did not render the form):\n%s", want, dom)
+		}
+	}
+	// The drag-to-set bars are the headline feature; their track class exists only
+	// in the edit template, so its presence proves the interactive bars rendered.
+	if !strings.Contains(dom, `class="dbar"`) {
+		t.Fatalf("edit DOM missing the drag-to-set bar track (input bars did not render):\n%s", dom)
+	}
+	// The range editor: the dynamic ["min", "max"] criterion renders its anchors as
+	// keyword chips, so "max" surfacing in the edit form proves the range is shown.
+	if !strings.Contains(dom, "max") {
+		t.Fatalf("edit DOM missing the criterion range keyword (range editor did not render):\n%s", dom)
+	}
+	if strings.Contains(dom, "{{") {
+		t.Fatalf("edit DOM still has unresolved {{ }} mustaches (Vue did not mount):\n%s", dom)
+	}
+}
+
+// TestEditRenderCheckIsLoadBearing is the edit-specific non-vacuity bite: the
+// same server on the list view (no hash) must NOT render the drag bars, proving
+// the check distinguishes a rendered edit form from the list, not merely "some
+// DOM came back".
+func TestEditRenderCheckIsLoadBearing(t *testing.T) {
+	store := pondera.NewFileStore(t.TempDir())
+	seedRankable(t, store, "local", "buy-car")
+	srv := httptest.NewServer(serveHandler(store, "local"))
+	defer srv.Close()
+
+	dom := chromeDumpDOM(t, srv.URL+"/") // no hash → list view, not the edit form
+
+	if strings.Contains(dom, `class="dbar"`) {
+		t.Fatalf("list view rendered a drag bar without opening the edit form — the edit check is not load-bearing:\n%s", dom)
+	}
+}
+
 // TestBrowserRenderCheckIsLoadBearing is the non-vacuity bite: it points the same
 // two assertions at a deliberately broken page — the SPA shell served but the
 // Vue runtime route removed — and confirms the browser does NOT render it (the

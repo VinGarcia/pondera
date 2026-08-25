@@ -9,35 +9,139 @@
        no network — all a family-demo machine needs. -->
   <script src="vue.global.prod.js"></script>
   <style>
-    :root { color-scheme: light dark; }
-    body { font-family: system-ui, sans-serif; max-width: 42rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
-    h1 { font-size: 1.4rem; }
-    h1 small { font-weight: normal; opacity: 0.6; font-size: 0.9rem; }
-    ul { list-style: none; padding: 0; }
-    li { padding: 0.4rem 0; }
-    a { cursor: pointer; text-decoration: underline; }
+    :root {
+      color-scheme: light dark;
+      --bg: #f7f8fa;
+      --card: #ffffff;
+      --ink: #1c2430;
+      --muted: #66707c;
+      --line: #e2e6ec;
+      --accent: #3478f6;
+      --accent-soft: #dbe6ff;
+      --track: #eef0f4;
+      --danger: #d0463b;
+      --good: #2f9e5e;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #14171c; --card: #1c2027; --ink: #e7ebf0; --muted: #9aa4b0;
+        --line: #2c313a; --accent: #5b8dff; --accent-soft: #26344f;
+        --track: #262b33; --danger: #e26257; --good: #4fbf7f;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      max-width: 46rem; margin: 0 auto; padding: 2rem 1.15rem 4rem;
+      line-height: 1.55; color: var(--ink); background: var(--bg);
+      -webkit-font-smoothing: antialiased;
+    }
+    h1 { font-size: 1.5rem; letter-spacing: -0.01em; margin: 0 0 1.4rem; }
+    h1 small { font-weight: 400; color: var(--muted); font-size: 0.85rem; }
+    h2 {
+      font-size: 1.15rem; margin: 0 0 1rem; display: flex; align-items: center;
+      gap: 0.6rem; flex-wrap: wrap;
+    }
+    a { color: var(--accent); cursor: pointer; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .muted { color: var(--muted); }
+    .error {
+      color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent);
+      border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
+      padding: 0.55rem 0.8rem; border-radius: 0.5rem; margin: 0.8rem 0;
+    }
+
+    /* Buttons */
+    button {
+      font: inherit; cursor: pointer; border-radius: 0.5rem; border: 1px solid var(--line);
+      background: var(--card); color: var(--ink); padding: 0.4rem 0.85rem; line-height: 1.2;
+      transition: background 0.12s, border-color 0.12s;
+    }
+    button:hover { border-color: var(--accent); }
+    button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+    button.primary:hover { filter: brightness(1.05); }
+    button.ghost { background: transparent; border-color: transparent; color: var(--muted); padding: 0.2rem 0.4rem; }
+    button.ghost:hover { color: var(--ink); border-color: transparent; }
+    button.link { background: none; border: none; color: var(--accent); padding: 0; text-decoration: underline; }
+    button.rm { color: var(--danger); background: none; border: none; padding: 0.2rem 0.4rem; font-size: 0.85rem; }
+    button.rm:hover { text-decoration: underline; }
+    button.small { padding: 0.25rem 0.6rem; font-size: 0.85rem; }
+
+    /* List view */
+    ul.decisions { list-style: none; padding: 0; margin: 0; }
+    ul.decisions li { padding: 0; margin: 0.35rem 0; }
+    ul.decisions a {
+      display: block; padding: 0.7rem 0.9rem; background: var(--card);
+      border: 1px solid var(--line); border-radius: 0.6rem; font-weight: 500;
+    }
+    ul.decisions a:hover { border-color: var(--accent); text-decoration: none; }
+    .toolbar { margin-bottom: 1.2rem; }
+
+    /* Ranking table */
     table { border-collapse: collapse; width: 100%; margin-top: 0.5rem; }
-    th, td { text-align: left; padding: 0.35rem 0.6rem; border-bottom: 1px solid #8884; }
+    th, td { text-align: left; padding: 0.5rem 0.7rem; border-bottom: 1px solid var(--line); }
+    th { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); font-weight: 600; }
+    td.rankno { color: var(--muted); font-variant-numeric: tabular-nums; width: 2rem; }
     td.score { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-    tr:first-child td { font-weight: 600; }
+    tbody tr:first-child td { font-weight: 600; }
+    tbody tr:first-child .bar > span { background: var(--good); }
     /* eval360-style score bar: a track with a fill whose width is the 0-100 score. */
-    .bar { display: inline-block; vertical-align: middle; width: 8rem; height: 0.7rem;
-           margin-right: 0.5rem; border-radius: 0.35rem; background: #8883; overflow: hidden; }
-    .bar > span { display: block; height: 100%; border-radius: 0.35rem; background: #3498db; }
-    .muted { opacity: 0.6; }
-    .error { color: #c0392b; }
-    button { font: inherit; cursor: pointer; }
-    .toolbar { margin-bottom: 1rem; }
-    fieldset { border: 1px solid #8884; border-radius: 0.4rem; margin: 0.75rem 0; padding: 0.5rem 0.75rem; }
-    legend { font-weight: 600; padding: 0 0.4rem; }
-    label { display: inline-block; }
-    input, select { font: inherit; padding: 0.2rem 0.3rem; }
+    .bar {
+      display: inline-block; vertical-align: middle; width: 8rem; height: 0.6rem;
+      margin-right: 0.6rem; border-radius: 0.4rem; background: var(--track); overflow: hidden;
+    }
+    .bar > span { display: block; height: 100%; border-radius: 0.4rem; background: var(--accent); }
+
+    /* Edit view */
+    fieldset {
+      border: 1px solid var(--line); border-radius: 0.7rem; margin: 1rem 0; padding: 0.9rem 1rem;
+      background: var(--card);
+    }
+    legend { font-weight: 600; padding: 0 0.4rem; font-size: 0.95rem; }
+    label { display: inline-block; font-size: 0.9rem; }
+    input, select {
+      font: inherit; padding: 0.35rem 0.45rem; border: 1px solid var(--line);
+      border-radius: 0.4rem; background: var(--bg); color: var(--ink);
+    }
+    input:focus, select:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
     input.name { width: 9rem; }
-    input.num { width: 5rem; text-align: right; font-variant-numeric: tabular-nums; }
-    .row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin: 0.3rem 0; }
-    .share { font-variant-numeric: tabular-nums; opacity: 0.7; min-width: 3rem; }
-    .rm { color: #c0392b; border: none; background: none; }
-    .actions { margin-top: 1rem; display: flex; gap: 0.75rem; align-items: center; }
+    input.num { width: 4.5rem; text-align: right; font-variant-numeric: tabular-nums; }
+    input.tiny { width: 3.6rem; text-align: right; font-variant-numeric: tabular-nums; padding: 0.25rem 0.35rem; }
+    .row { display: flex; flex-wrap: wrap; gap: 0.55rem; align-items: center; margin: 0.5rem 0; }
+    .crit-card, .opt-card {
+      border: 1px solid var(--line); border-radius: 0.6rem; padding: 0.7rem 0.85rem;
+      margin: 0.6rem 0; background: var(--bg);
+    }
+    .crit-head { display: flex; flex-wrap: wrap; gap: 0.55rem; align-items: center; }
+    .field { display: flex; flex-direction: column; gap: 0.15rem; font-size: 0.75rem; color: var(--muted); }
+    .field > input, .field > select { font-size: 0.9rem; }
+    .share { font-variant-numeric: tabular-nums; color: var(--accent); font-weight: 600; min-width: 2.6rem; }
+    .opt-head { display: flex; align-items: center; gap: 0.55rem; margin-bottom: 0.5rem; }
+    .opt-crit { display: grid; grid-template-columns: 8rem 1fr 3.2rem; gap: 0.5rem 0.7rem; align-items: center; }
+    .opt-crit .cname { font-size: 0.85rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .opt-crit .val { font-variant-numeric: tabular-nums; text-align: right; font-size: 0.9rem; }
+    .hint { font-size: 0.8rem; color: var(--muted); margin: 0.15rem 0 0.6rem; }
+
+    /* Drag-to-set bar (eval360-style, but interactive): click/drag the track to set a value. */
+    .dbar {
+      position: relative; height: 1.15rem; border-radius: 0.6rem; background: var(--track);
+      cursor: ew-resize; touch-action: none; user-select: none; overflow: hidden;
+      border: 1px solid var(--line);
+    }
+    .dbar > .fill {
+      position: absolute; left: 0; top: 0; bottom: 0; border-radius: 0.6rem 0 0 0.6rem;
+      background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 70%, transparent), var(--accent));
+      pointer-events: none;
+    }
+    .dbar > .knob {
+      position: absolute; top: 50%; width: 0.85rem; height: 0.85rem; border-radius: 50%;
+      background: #fff; border: 2px solid var(--accent); transform: translate(-50%, -50%);
+      box-shadow: 0 1px 3px rgba(0,0,0,0.25); pointer-events: none;
+    }
+    .dbar:hover { border-color: var(--accent); }
+    .weightbar { width: 8rem; }
+
+    .actions { margin-top: 1.4rem; display: flex; gap: 0.75rem; align-items: center; }
   </style>
 </head>
 <body>
@@ -46,14 +150,14 @@
 
     <!-- Ranking view: an existing decision opened from the list. -->
     <template v-if="chosen">
-      <button @click="backToList">&larr; all decisions</button>
-      <h2>{{ chosen }} <button @click="startEdit(chosen)">edit</button></h2>
+      <button class="ghost" @click="backToList">&larr; all decisions</button>
+      <h2>{{ chosen }} <button class="small" @click="startEdit(chosen)">edit</button></h2>
       <p v-if="rankError" class="error">Can't rank yet: {{ rankError }}</p>
       <table v-else-if="ranking.length">
         <thead><tr><th>#</th><th>Option</th><th class="score">Score</th></tr></thead>
         <tbody>
           <tr v-for="(r, i) in ranking" :key="r.Option">
-            <td>{{ i + 1 }}</td><td>{{ r.Option }}</td>
+            <td class="rankno">{{ i + 1 }}</td><td>{{ r.Option }}</td>
             <td class="score">
               <span class="bar"><span :style="{ width: r.Score + '%' }"></span></span>{{ r.Score.toFixed(2) }}
             </td>
@@ -64,7 +168,7 @@
 
     <!-- Editing view: build a decision, then POST (new) or PUT (existing) it. -->
     <template v-else-if="editing">
-      <button @click="cancelEdit">&larr; all decisions</button>
+      <button class="ghost" @click="cancelEdit">&larr; all decisions</button>
       <h2>{{ mode === 'edit' ? 'Edit ' + draft.title : 'New decision' }}</h2>
 
       <div class="row" v-if="mode !== 'edit'">
@@ -73,46 +177,72 @@
 
       <fieldset>
         <legend>Criteria</legend>
-        <p class="muted">Weights are relative; the share each one carries is shown live.</p>
-        <div class="row" v-for="(c, ci) in draft.criteria" :key="ci">
-          <input class="name" v-model="c.name" placeholder="battery">
-          <label>weight <input class="num" type="number" min="0" step="1" v-model.number="c.weight"></label>
-          <select v-model="c.direction">
-            <option value="benefit">higher is better</option>
-            <option value="cost">lower is better</option>
-          </select>
-          <span class="share">{{ share(c.weight) }}</span>
-          <button class="rm" @click="removeCriterion(ci)" v-if="draft.criteria.length > 1">remove</button>
+        <p class="hint">Drag a weight bar to set how much a criterion matters; the share it carries is shown live. Each criterion maps its raw values onto 0–100 through its range.</p>
+        <div class="crit-card" v-for="(c, ci) in draft.criteria" :key="ci">
+          <div class="crit-head">
+            <input class="name" v-model="c.name" placeholder="battery">
+            <div class="field">weight
+              <div class="dbar weightbar" @pointerdown="beginDrag($event, 0, weightMax, val => c.weight = val, 0.5)">
+                <div class="fill" :style="{ width: fillPct(c.weight, 0, weightMax) + '%' }"></div>
+                <div class="knob" :style="{ left: fillPct(c.weight, 0, weightMax) + '%' }"></div>
+              </div>
+            </div>
+            <label class="field">&nbsp;<input class="num" type="number" min="0" step="0.5" v-model.number="c.weight"></label>
+            <select v-model="c.direction">
+              <option value="benefit">higher is better</option>
+              <option value="cost">lower is better</option>
+            </select>
+            <span class="share">{{ share(c.weight) }}</span>
+            <button class="rm" @click="removeCriterion(ci)" v-if="draft.criteria.length > 1">remove</button>
+          </div>
+          <div class="row">
+            <span class="cname">range</span>
+            <template v-for="ei in [0, 1]" :key="ei">
+              <input v-if="typeof c.range[ei] === 'number'" class="tiny" type="number" step="any" v-model.number="c.range[ei]">
+              <button v-else class="link small" @click="c.range[ei] = ei === 0 ? 0 : 100" :title="'dynamic anchor — click to set a number'">{{ c.range[ei] }} ✎</button>
+              <span v-if="ei === 0" class="muted">–</span>
+            </template>
+            <span class="muted" style="font-size:0.8rem">(default 0–100)</span>
+          </div>
         </div>
-        <button @click="addCriterion">+ criterion</button>
+        <button class="small" @click="addCriterion">+ criterion</button>
       </fieldset>
 
       <fieldset>
         <legend>Options</legend>
-        <div class="row" v-for="(o, oi) in draft.options" :key="oi">
-          <input class="name" v-model="o.name" placeholder="light">
-          <label v-for="(c, ci) in draft.criteria" :key="ci">
-            {{ c.name || 'criterion ' + (ci + 1) }}
-            <input class="num" type="number" step="any" v-model.number="o.scores[ci]">
-          </label>
-          <button class="rm" @click="removeOption(oi)" v-if="draft.options.length > 1">remove</button>
+        <p class="hint">Drag a bar to score each option on a criterion; the bar spans that criterion's range.</p>
+        <div class="opt-card" v-for="(o, oi) in draft.options" :key="oi">
+          <div class="opt-head">
+            <input class="name" v-model="o.name" placeholder="light">
+            <button class="rm" @click="removeOption(oi)" v-if="draft.options.length > 1">remove</button>
+          </div>
+          <div class="opt-crit">
+            <template v-for="(c, ci) in draft.criteria" :key="ci">
+              <span class="cname">{{ c.name || 'criterion ' + (ci + 1) }}</span>
+              <div class="dbar" @pointerdown="beginDrag($event, boundsFor(ci)[0], boundsFor(ci)[1], val => o.scores[ci] = val)">
+                <div class="fill" :style="{ width: fillPct(o.scores[ci], boundsFor(ci)[0], boundsFor(ci)[1]) + '%' }"></div>
+                <div class="knob" :style="{ left: fillPct(o.scores[ci], boundsFor(ci)[0], boundsFor(ci)[1]) + '%' }"></div>
+              </div>
+              <input class="tiny val" type="number" step="any" v-model.number="o.scores[ci]">
+            </template>
+          </div>
         </div>
-        <button @click="addOption">+ option</button>
+        <button class="small" @click="addOption">+ option</button>
       </fieldset>
 
       <p v-if="saveError" class="error">{{ saveError }}</p>
       <div class="actions">
-        <button @click="save">{{ mode === 'edit' ? 'Save & re-rank' : 'Create decision' }}</button>
+        <button class="primary" @click="save">{{ mode === 'edit' ? 'Save & re-rank' : 'Create decision' }}</button>
         <button @click="cancelEdit">Cancel</button>
       </div>
     </template>
 
     <!-- List view: pick a decision to rank, or start a new one. -->
     <template v-else>
-      <div class="toolbar"><button @click="startCreate">+ New decision</button></div>
+      <div class="toolbar"><button class="primary" @click="startCreate">+ New decision</button></div>
       <p v-if="loadError" class="error">{{ loadError }}</p>
       <p v-else-if="!decisions.length" class="muted">No decisions yet.</p>
-      <ul v-else>
+      <ul class="decisions" v-else>
         <li v-for="t in decisions" :key="t"><a @click="open(t)">{{ t }}</a></li>
       </ul>
     </template>
@@ -120,9 +250,12 @@
 
   <script>
     const { createApp } = Vue;
+    // Weights are relative and unbounded; the drag bar needs a ceiling, so it
+    // spans 0–weightMax. Larger weights are still reachable through the number input.
+    const WEIGHT_MAX = 10;
     const blankDraft = () => ({
       title: '',
-      criteria: [{ name: '', weight: 1, direction: 'benefit' }],
+      criteria: [{ name: '', weight: 1, direction: 'benefit', range: [0, 100] }],
       options: [{ name: '', scores: {} }],
     });
     createApp({
@@ -130,6 +263,7 @@
         return {
           decisions: [], chosen: null, ranking: [], loadError: '', rankError: '',
           editing: false, mode: 'create', draft: blankDraft(), saveError: '',
+          weightMax: WEIGHT_MAX,
         };
       },
       async mounted() {
@@ -141,14 +275,24 @@
         await this.syncFromHash();
       },
       methods: {
-        // syncFromHash opens the decision named in the hash (empty hash → list).
-        // Guarded against re-opening what's already open, so setting the hash from
-        // open() below can't loop back into another fetch.
+        // syncFromHash routes the URL hash to a view: empty → list, "edit" → new
+        // decision, "edit:<title>" → edit that decision, anything else → open that
+        // decision's ranking. The edit forms give the tune view a deep-link a demo
+        // can share and a headless test can render without a click. Guarded against
+        // re-opening what's already open, so setting the hash from open() below
+        // can't loop back into another fetch.
         async syncFromHash() {
-          const title = decodeURIComponent(location.hash.replace(/^#/, ''));
-          if (!title) { this.chosen = null; return; }
-          if (this.editing || this.chosen === title) return;
-          await this.open(title, true);
+          const raw = decodeURIComponent(location.hash.replace(/^#/, ''));
+          if (raw === 'edit') { this.startCreate(); return; }
+          if (raw.startsWith('edit:')) {
+            const title = raw.slice(5);
+            if (this.editing && this.mode === 'edit' && this.draft.title === title) return;
+            await this.startEdit(title);
+            return;
+          }
+          if (!raw) { this.chosen = null; return; }
+          if (this.editing || this.chosen === raw) return;
+          await this.open(raw, true);
         },
         backToList() { this.chosen = null; if (location.hash) location.hash = ''; },
         async reload() {
@@ -171,8 +315,10 @@
         },
         // startEdit loads the stored decision and reshapes it into the same draft
         // the create form edits: Scores come back keyed by criterion NAME, but the
-        // form edits scores by row index, so remap by the criterion order. Opening
-        // this from the ranking view is the edit-and-re-rank loop's front door.
+        // form edits scores by row index, so remap by the criterion order. The
+        // per-criterion Range comes back as a two-element array; keep it so the UI
+        // can show and edit it. Opening this from the ranking view is the
+        // edit-and-re-rank loop's front door.
         async startEdit(title) {
           this.saveError = '';
           const res = await fetch('decisions/' + encodeURIComponent(title));
@@ -180,7 +326,10 @@
           const d = await res.json();
           this.draft = {
             title: d.Title,
-            criteria: (d.Criteria || []).map((c) => ({ name: c.Name, weight: c.Weight, direction: c.Direction })),
+            criteria: (d.Criteria || []).map((c) => ({
+              name: c.Name, weight: c.Weight, direction: c.Direction,
+              range: Array.isArray(c.Range) ? c.Range.slice() : [0, 100],
+            })),
             options: (d.Options || []).map((o) => ({
               name: o.Name,
               scores: (d.Criteria || []).reduce((acc, c, ci) => { acc[ci] = (o.Scores || {})[c.Name]; return acc; }, {}),
@@ -189,7 +338,7 @@
           this.mode = 'edit'; this.chosen = null; this.editing = true;
         },
         cancelEdit() { this.editing = false; },
-        addCriterion() { this.draft.criteria.push({ name: '', weight: 1, direction: 'benefit' }); },
+        addCriterion() { this.draft.criteria.push({ name: '', weight: 1, direction: 'benefit', range: [0, 100] }); },
         removeCriterion(i) { this.draft.criteria.splice(i, 1); },
         addOption() { this.draft.options.push({ name: '', scores: {} }); },
         removeOption(i) { this.draft.options.splice(i, 1); },
@@ -198,14 +347,70 @@
           if (total <= 0) return '—';
           return Math.round((Number(weight) || 0) / total * 100) + '%';
         },
+        // boundsFor returns the numeric [lo, hi] a criterion's score bar spans.
+        // Fixed anchors are used as-is; the keyword anchors "min"/"max" are resolved
+        // against the current option values for that criterion, mirroring the engine,
+        // so a dynamic range still gives the bar a sensible span to drag within.
+        boundsFor(ci) {
+          const raw = (this.draft.criteria[ci] && this.draft.criteria[ci].range) || [0, 100];
+          let [lo, hi] = raw;
+          if (lo === 'min' || lo === 'max' || hi === 'min' || hi === 'max') {
+            const vals = this.draft.options
+              .map((o) => Number(o.scores[ci]))
+              .filter((v) => !Number.isNaN(v));
+            const mn = vals.length ? Math.min(...vals) : 0;
+            const mx = vals.length ? Math.max(...vals) : 100;
+            const res = (a, d) => (a === 'min' ? mn : a === 'max' ? mx : a == null ? d : Number(a));
+            lo = res(lo, 0); hi = res(hi, 100);
+          } else {
+            lo = Number(lo); hi = Number(hi);
+          }
+          if (!(hi > lo)) hi = lo + 1; // keep the bar's span positive
+          return [lo, hi];
+        },
+        // fillPct is the 0-100 width of a bar's fill for value v within [lo, hi].
+        fillPct(v, lo, hi) {
+          const n = Number(v);
+          if (!(hi > lo) || Number.isNaN(n)) return 0; // unset score → empty bar, not NaN%
+          return Math.min(100, Math.max(0, (n - lo) / (hi - lo) * 100));
+        },
+        // beginDrag turns a pointer press on a bar into a live value: it maps the
+        // pointer's x within the track to [min, max], snaps to step, and feeds the
+        // result to setter on press and on every move until release. Listening on
+        // window (not the bar) means the drag keeps tracking even when the pointer
+        // leaves the bar, the behaviour a real slider has.
+        beginDrag(e, min, max, setter, step) {
+          const track = e.currentTarget;
+          const snap = step || (max - min) / 100 || 1;
+          const apply = (clientX) => {
+            const rect = track.getBoundingClientRect();
+            let frac = rect.width ? (clientX - rect.left) / rect.width : 0;
+            frac = Math.min(1, Math.max(0, frac));
+            let val = min + frac * (max - min);
+            val = Math.round(val / snap) * snap;
+            setter(Number(val.toFixed(6)));
+          };
+          apply(e.clientX);
+          const move = (ev) => apply(ev.clientX);
+          const up = () => {
+            window.removeEventListener('pointermove', move);
+            window.removeEventListener('pointerup', up);
+          };
+          window.addEventListener('pointermove', move);
+          window.addEventListener('pointerup', up);
+          e.preventDefault();
+        },
         // build assembles the exact Decision JSON the backend decodes: field names
-        // match the Go struct, Direction is its keyword, Scores is keyed by
-        // criterion NAME (the form edits scores by row index, so remap here).
+        // match the Go struct, Direction is its keyword, Range is the two-element
+        // anchor array (numbers stay numbers, the "min"/"max" keywords stay strings),
+        // and Scores is keyed by criterion NAME (the form edits scores by row index,
+        // so remap here).
         build() {
           return {
             Title: this.draft.title.trim(),
             Criteria: this.draft.criteria.map((c) => ({
               Name: c.name.trim(), Weight: Number(c.weight) || 0, Direction: c.direction,
+              Range: c.range.map((a) => (a === 'min' || a === 'max' ? a : Number(a))),
             })),
             Options: this.draft.options.map((o) => {
               const scores = {};

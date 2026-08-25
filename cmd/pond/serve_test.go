@@ -214,6 +214,72 @@ func TestServeHandlerEditDecisionThroughSPA(t *testing.T) {
 	}
 }
 
+// TestServeHandlerRangeRoundTripsThroughSPA is the anti-sprint#28 guard for the
+// per-criterion range feature: the range the edit form sends must survive PUT →
+// GET as the same anchor array AND change what Rank() computes — a range that is
+// accepted but ignored (the old behaviour, when Range serialized as {}) would
+// silently make the range editor a no-op. One cost criterion, one option scoring
+// 40: under the default [0, 100] its contribution is 60; retuning the range to
+// [0, "max"] pins the sole value at the top of a cost axis, dropping the score to
+// 0. The GET in between proves the array is exposed to the UI, not just stored.
+func TestServeHandlerRangeRoundTripsThroughSPA(t *testing.T) {
+	store := pondera.NewFileStore(t.TempDir())
+	h := serveHandler(store, "local")
+
+	// Exactly the shape build() emits, now including the Range anchor array.
+	create := `{"Title":"one-cost",` +
+		`"Criteria":[{"Name":"price","Weight":1,"Direction":"cost","Range":[0,100]}],` +
+		`"Options":[{"Name":"only","Scores":{"price":40}}]}`
+	if rec := httptestPost(h, "/decisions", create); rec.Code != http.StatusCreated {
+		t.Fatalf("POST /decisions = %d, want 201 (body %s)", rec.Code, rec.Body.String())
+	}
+
+	// GET exposes the range to the UI as the anchor array, not an opaque object.
+	rec := httptestGet(h, "/decisions/one-cost")
+	var got pondera.Decision
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("GET decision not decodable: %v (%s)", err, rec.Body.String())
+	}
+	if got.Criteria[0].Range.String() != "[0, 100]" {
+		t.Fatalf("GET range = %s, want [0, 100] (range not exposed as an array)", got.Criteria[0].Range.String())
+	}
+
+	// Under the default range, the cost contribution of 40 is 60.
+	if score := topScore(t, h, "one-cost"); score != 60 {
+		t.Fatalf("default-range score = %g, want 60", score)
+	}
+
+	// Retune only the range to [0, "max"]; the score must change, proving the range
+	// reached Rank() rather than being accepted and dropped.
+	retuned := `{"Title":"one-cost",` +
+		`"Criteria":[{"Name":"price","Weight":1,"Direction":"cost","Range":[0,"max"]}],` +
+		`"Options":[{"Name":"only","Scores":{"price":40}}]}`
+	if rec := httptestPut(h, "/decisions/one-cost", retuned); rec.Code != http.StatusOK {
+		t.Fatalf("PUT /decisions/one-cost = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	if score := topScore(t, h, "one-cost"); score != 0 {
+		t.Fatalf("retuned [0,\"max\"] score = %g, want 0 (range edit did not re-rank)", score)
+	}
+}
+
+// topScore fetches a decision's ranking through the mux and returns the top
+// option's score, failing the test on any transport or decode error.
+func topScore(t *testing.T, h http.Handler, title string) float64 {
+	t.Helper()
+	rec := httptestGet(h, "/decisions/"+title+"/rank")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET rank %s = %d, want 200 (body %s)", title, rec.Code, rec.Body.String())
+	}
+	var ranked []pondera.Result
+	if err := json.Unmarshal(rec.Body.Bytes(), &ranked); err != nil {
+		t.Fatalf("rank body not JSON: %v (%s)", err, rec.Body.String())
+	}
+	if len(ranked) == 0 {
+		t.Fatalf("rank %s returned no results", title)
+	}
+	return ranked[0].Score
+}
+
 // TestServeHandlerRanksWithScoreBars covers the fatia-4 demo polish Vini asked for
 // ("barras estilo eval360, bonito pra mostrar a leigos"): the ranking view must not
 // be a bare column of numbers — each option's score is drawn as a proportional bar,
