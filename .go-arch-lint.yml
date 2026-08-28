@@ -1,0 +1,25 @@
+version: 3
+allow:
+  depOnAnyVendor: false
+  deepScan: false # enforce import boundaries only; DI-graph mode false-positives on injection
+
+vendors:
+  toml:
+    in: github.com/BurntSushi/toml
+
+components:
+  core:   { in: . }        # root package `pondera` — the domain/engine
+  server: { in: server }   # inbound HTTP adapter over a Store
+  webui:  { in: webui }    # embedded single-file Vue SPA + assets
+  cmd:    { in: cmd/** }   # `pond` entrypoint
+
+deps:
+  core:
+    canUse: [toml]         # TOML is the on-disk decision format the engine owns
+  server:
+    mayDependOn: [core, server] # self-ref: black-box `server_test` imports `server`
+  webui:
+    mayDependOn: [webui]        # self-ref: black-box `webui_test` imports `webui`
+  cmd:
+    anyProjectDeps: true   # entrypoint wires the adapters onto the core
+    anyVendorDeps: true

@@ -164,3 +164,31 @@ Alternatively, with Docker (the image is the static binary on `scratch`):
 $ docker build -t pondera .
 $ docker run -p 8080:8080 -v "$PWD:/data" pondera
 ```
+
+## Architecture
+
+Pondera follows a hexagonal layout with a deliberately flat folder structure:
+the domain lives in the root package and every other package points *inward* to
+it. Nothing in the core knows about HTTP, the CLI, or the browser.
+
+```
+cmd/pond ──▶ server ──▶ pondera ◀── webui
+    │                      ▲            │
+    └──────────────────────┴────────────┘
+         (wires the adapters onto the core)
+```
+
+- **`pondera`** (root package) — the domain and engine: the decision model,
+  build/validation rules, weighted scoring and ranking, TOML (de)serialization,
+  and the file-backed `Store`. It has **no internal dependencies**; ranking is
+  defined here once and never re-implemented elsewhere.
+- **`server`** — an inbound HTTP adapter that exposes a `Store` as a mountable
+  JSON handler. Depends only on `pondera`.
+- **`webui`** — the embedded single-file Vue SPA and its runtime, served as
+  static assets. Self-contained; no internal dependencies.
+- **`cmd/pond`** — the entrypoint. The CLI is the disciplined path over the
+  engine, and `pond serve` wires `server` + `webui` onto the core.
+
+The import direction (`cmd → server/webui → pondera`, never the reverse) is
+enforced mechanically with [`go-arch-lint`](https://github.com/fe3dback/go-arch-lint)
+via `make lint`.
