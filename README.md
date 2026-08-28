@@ -1,18 +1,44 @@
-# pondera
+# Pondera
 
 Rank options by weighted values: one decider, K weighted criteria, M options.
 
-You declare *what matters* and *how much* (the criteria and their weights) and
-**lock** that before you add a single option. Once locked, no score can bend a
-weight toward a favorite — the anti-rationalization rule is mechanical, not a
-matter of willpower. The result is an auditable ranking: a TOML file you can read,
-diff, and defend.
+You declare *what matters* and *how much* (the criteria and their weights), and
+pondera turns that into a single comparable score per option — all you do is
+estimate where each option lands on each criterion's range (usually 0–100).
+
+The system is flexible enough to serve humans and AIs alike: a person deciding
+which notebook to buy, or an AI formalizing its decision-making when comparing,
+say, two ways of implementing the same feature.
+
+The result is an auditable ranking: a TOML file you can read, diff, and defend.
+
+Criteria and weights can also be **locked** (`pond lock`) before any option is
+added. Once locked, no score can bend a weight toward a favorite — the
+anti-rationalization rule is mechanical, not a matter of willpower. This is
+especially recommended when an AI fills in the scores, so the model can't
+quietly adjust the weights to reach the result it wants.
+
+## Setup & Usage
 
 The CLI binary is `pond` (short for pondera):
 
 ```
 go install github.com/vingarcia/pondera/cmd/pond@latest
 ```
+
+Then see the available commands with:
+
+```
+pond --help
+```
+
+Or start a local server with:
+
+```
+pond serve --addr :8080
+```
+
+and open http://localhost:8080 to explore it through the web UI.
 
 ## Criteria
 
@@ -111,7 +137,7 @@ pond show          <file>                                    print current state
 pond serve         [--addr :8080] [--dir .] [--owner local]  serve the web UI + API
 ```
 
-## Running the local server
+## Configuring the Server
 
 `pond serve` runs the web UI (a Vue SPA embedded in the binary) plus the JSON
 API over the decision files in a directory:
