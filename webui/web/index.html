@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>pondera — rank options by weighted values</title>
+  <title>Pondera — rank options by weighted values</title>
   <!-- A host that fronts pondera with an auth gateway injects a config script
        here (setting window.PONDERA_AUTH_URL); standalone `pond serve` leaves it
        untouched and stays single-user with no login. -->
@@ -165,7 +165,25 @@
       box-shadow: 0 1px 3px rgba(0,0,0,0.25); pointer-events: none;
     }
     .dbar:hover { border-color: var(--accent); }
-    .weightbar { width: 8rem; }
+    /* The weight bar grows into whatever width the row has spare: a short drag
+       track makes precise dragging fiddly, so the bar takes the space the
+       direction dropdown freed up by moving to the row below. */
+    .weightwrap { display: flex; flex: 1; gap: 0.55rem; align-items: center; min-width: 13rem; }
+    .weightwrap .field.grow { flex: 1; }
+    .weightbar { width: auto; }
+
+    /* Collapsible criteria section */
+    legend.toggle { cursor: pointer; user-select: none; }
+    legend.toggle:hover { color: var(--accent); }
+    .chev { font-size: 0.8rem; color: var(--muted); }
+
+    /* Narrow screens: each criterion control on its own line — name, weight,
+       direction, range — so the drag bar keeps a usable width. */
+    @media (max-width: 640px) {
+      .crit-head input.name { width: 100%; }
+      .weightwrap { flex-basis: 100%; }
+      .crit-sub select.dirsel { width: 100%; }
+    }
 
     .actions { margin-top: 1.4rem; display: flex; gap: 0.75rem; align-items: center; }
 
@@ -186,7 +204,7 @@
 </head>
 <body>
   <div id="app">
-    <h1>pondera <small>rank options by weighted values</small></h1>
+    <h1>Pondera <small>rank options by weighted values</small></h1>
 
     <!-- Decision view: ranking and configuration unified on one page. The ranking
          panel sticks to the top while the always-editable criteria and options
@@ -215,36 +233,46 @@
       </div>
 
       <fieldset>
-        <legend>Criteria</legend>
-        <p class="hint">Weights are shares that always add up to 100%: raise one and the others fall proportionally. Each criterion maps its raw values onto 0–100 through its range.</p>
-        <div class="crit-card" v-for="(c, ci) in draft.criteria" :key="ci">
-          <div class="crit-head">
-            <input class="name" v-model="c.name" placeholder="battery">
-            <div class="field">weight
-              <div class="dbar weightbar" @pointerdown="beginDrag($event, 0, 100, val => setWeight(ci, val), 1)">
-                <div class="fill" :style="{ width: fillPct(c.weight, 0, 100) + '%' }"></div>
-                <div class="knob" :style="{ left: fillPct(c.weight, 0, 100) + '%' }"></div>
+        <!-- The legend toggles the whole section: an existing decision opens with
+             its criteria collapsed (they are usually settled — tuning happens on
+             the options), a brand-new one opens expanded. v-show (not v-if) keeps
+             the collapsed DOM around, so a collapse is instant and stateless. -->
+        <legend class="toggle" @click="critsCollapsed = !critsCollapsed">
+          Criteria <span class="chev">{{ critsCollapsed ? '▸' : '▾' }}</span>
+        </legend>
+        <div v-show="!critsCollapsed">
+          <p class="hint">Weights are shares that always add up to 100%: raise one and the others fall proportionally. Each criterion maps its raw values onto 0–100 through its range.</p>
+          <div class="crit-card" v-for="(c, ci) in draft.criteria" :key="ci">
+            <div class="crit-head">
+              <input class="name" v-model="c.name" placeholder="battery">
+              <div class="weightwrap">
+                <div class="field grow">weight
+                  <div class="dbar weightbar" @pointerdown="beginDrag($event, 0, 100, val => setWeight(ci, val), 1)">
+                    <div class="fill" :style="{ width: fillPct(c.weight, 0, 100) + '%' }"></div>
+                    <div class="knob" :style="{ left: fillPct(c.weight, 0, 100) + '%' }"></div>
+                  </div>
+                </div>
+                <label class="field">&nbsp;<input class="num" type="number" min="0" max="100" step="1" v-model.number="c.weight" @change="setWeight(ci, c.weight)"></label>
+                <span class="share">{{ share(c.weight) }}</span>
               </div>
+              <button class="rm" @click="removeCriterion(ci)" v-if="draft.criteria.length > 1">remove</button>
             </div>
-            <label class="field">&nbsp;<input class="num" type="number" min="0" max="100" step="1" v-model.number="c.weight" @change="setWeight(ci, c.weight)"></label>
-            <select v-model="c.direction">
-              <option value="benefit">higher is better</option>
-              <option value="cost">lower is better</option>
-            </select>
-            <span class="share">{{ share(c.weight) }}</span>
-            <button class="rm" @click="removeCriterion(ci)" v-if="draft.criteria.length > 1">remove</button>
+            <div class="row crit-sub">
+              <select class="dirsel" v-model="c.direction">
+                <option value="benefit">higher is better</option>
+                <option value="cost">lower is better</option>
+              </select>
+              <span class="cname">range</span>
+              <template v-for="ei in [0, 1]" :key="ei">
+                <input v-if="typeof c.range[ei] === 'number'" class="num" type="number" step="any" :style="{ width: numWidth(c.range[ei]) }" v-model.number="c.range[ei]">
+                <button v-else class="link small" @click="c.range[ei] = ei === 0 ? 0 : 100" :title="'dynamic anchor — click to set a number'">{{ c.range[ei] }} ✎</button>
+                <span v-if="ei === 0" class="muted">–</span>
+              </template>
+              <span class="muted" style="font-size:0.8rem">(default 0–100)</span>
+            </div>
           </div>
-          <div class="row">
-            <span class="cname">range</span>
-            <template v-for="ei in [0, 1]" :key="ei">
-              <input v-if="typeof c.range[ei] === 'number'" class="num" type="number" step="any" :style="{ width: numWidth(c.range[ei]) }" v-model.number="c.range[ei]">
-              <button v-else class="link small" @click="c.range[ei] = ei === 0 ? 0 : 100" :title="'dynamic anchor — click to set a number'">{{ c.range[ei] }} ✎</button>
-              <span v-if="ei === 0" class="muted">–</span>
-            </template>
-            <span class="muted" style="font-size:0.8rem">(default 0–100)</span>
-          </div>
+          <button class="small" @click="addCriterion">+ criterion</button>
         </div>
-        <button class="small" @click="addCriterion">+ criterion</button>
       </fieldset>
 
       <fieldset>
@@ -367,6 +395,9 @@
           // writes, so a stale response can't corrupt the page it no longer owns.
           created: false, loading: false, epoch: 0, saving: false, saveAgain: false,
           saveState: 'saved', saveError: '', blockReason: '', saveTimer: null,
+          // Existing decisions open with the criteria collapsed (usually settled);
+          // a new decision opens expanded, since criteria are what it needs first.
+          critsCollapsed: false,
           showTitleDialog: false, newTitle: '', dialogError: '',
         };
       },
@@ -446,6 +477,7 @@
           this.epoch++;
           this.loading = true;
           this.view = 'decision'; this.title = title; this.created = true;
+          this.critsCollapsed = true;
           this.ranking = []; this.rankError = ''; this.saveError = ''; this.saveState = 'saved';
           if (!fromHash) location.hash = encodeURIComponent(title);
           const res = await apiFetch('decisions/' + encodeURIComponent(title));
@@ -496,6 +528,7 @@
           this.epoch++;
           this.loading = true;
           this.view = 'decision'; this.title = t; this.created = false;
+          this.critsCollapsed = false;
           this.draft = blankDraft();
           this.ranking = []; this.rankError = ''; this.saveError = '';
           this.saveState = 'blocked'; this.blockReason = this.validate();
