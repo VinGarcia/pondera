@@ -350,7 +350,6 @@
     // both span 0–100, and setWeight redistributes the rest proportionally, so
     // "how much this criterion matters" reads directly as a percentage.
     const blankDraft = () => ({
-      title: '',
       criteria: [{ name: '', weight: 100, direction: 'benefit', range: [0, 100] }],
       options: [{ name: '', scores: {} }],
     });
@@ -363,7 +362,10 @@
           // created flips after the first successful POST: from then on auto-save
           // PUTs. loading suppresses the auto-save watcher while a decision is
           // being (re)loaded programmatically, so opening never triggers a save.
-          created: false, loading: false,
+          // epoch counts navigations: a save that resolves after the user moved to
+          // another decision compares its snapshot against it and drops its state
+          // writes, so a stale response can't corrupt the page it no longer owns.
+          created: false, loading: false, epoch: 0, saving: false, saveAgain: false,
           saveState: 'saved', saveError: '', blockReason: '', saveTimer: null,
           showTitleDialog: false, newTitle: '', dialogError: '',
         };
@@ -410,13 +412,19 @@
         async syncFromHash() {
           let raw = decodeURIComponent(location.hash.replace(/^#/, ''));
           if (raw === 'edit') { this.view = 'list'; this.startCreate(); return; }
-          if (raw.startsWith('edit:')) raw = raw.slice(5);
+          // Legacy "edit:<title>" deep-links land on the unified page — unless a
+          // decision is literally titled "edit:<...>", which takes precedence.
+          if (raw.startsWith('edit:') && !this.decisions.includes(raw)) raw = raw.slice(5);
           if (!raw) { this.view = 'list'; return; }
           if (this.view === 'decision' && this.title === raw) return;
           await this.open(raw, true);
         },
-        backToList() {
-          this.flushSave();
+        // backToList flushes any pending save BEFORE leaving, and stays on the
+        // page when that flush fails — navigating away would silently discard the
+        // edit the failed save still holds.
+        async backToList() {
+          if (!(await this.flushSave())) return;
+          this.epoch++;
           this.view = 'list'; this.title = '';
           if (location.hash) location.hash = '';
           this.reload();
@@ -434,7 +442,8 @@
         // order. The per-criterion Range comes back as a two-element array; keep it
         // so the UI can show and edit it.
         async open(title, fromHash) {
-          this.flushSave();
+          await this.flushSave();
+          this.epoch++;
           this.loading = true;
           this.view = 'decision'; this.title = title; this.created = true;
           this.ranking = []; this.rankError = ''; this.saveError = ''; this.saveState = 'saved';
@@ -447,7 +456,6 @@
           }
           const d = await res.json();
           this.draft = {
-            title: d.title,
             criteria: (d.criteria || []).map((c) => ({
               name: c.name, weight: c.weight, direction: c.direction,
               range: Array.isArray(c.range) ? c.range.slice() : [0, 100],
@@ -465,7 +473,9 @@
           this.$nextTick(() => { this.loading = false; });
         },
         async refreshRank() {
+          const epoch = this.epoch;
           const res = await apiFetch('decisions/' + encodeURIComponent(this.title) + '/rank');
+          if (epoch !== this.epoch) return; // page moved on; drop the stale ranking
           if (res.status === 422) { this.rankError = await res.text(); this.ranking = []; return; }
           if (!res.ok) { this.rankError = 'HTTP ' + res.status; this.ranking = []; return; }
           this.ranking = await res.json();
@@ -483,9 +493,10 @@
           if (!t) { this.dialogError = 'Give the decision a title — it names its file.'; return; }
           if (this.decisions.includes(t)) { this.dialogError = 'A decision with this title already exists.'; return; }
           this.showTitleDialog = false;
+          this.epoch++;
           this.loading = true;
           this.view = 'decision'; this.title = t; this.created = false;
-          this.draft = blankDraft(); this.draft.title = t;
+          this.draft = blankDraft();
           this.ranking = []; this.rankError = ''; this.saveError = '';
           this.saveState = 'blocked'; this.blockReason = this.validate();
           location.hash = encodeURIComponent(t);
@@ -500,12 +511,20 @@
           this.saveTimer = setTimeout(() => this.save(), 600);
         },
         // flushSave runs a pending debounced save immediately — used when leaving
-        // the page so the last edit isn't lost to the timer.
-        flushSave() {
-          if (!this.saveTimer) return;
-          clearTimeout(this.saveTimer);
-          this.saveTimer = null;
-          if (this.saveState === 'dirty') this.save();
+        // the page so the last edit isn't lost to the timer. Returns false only
+        // when the flushed save failed (the caller should not navigate away).
+        async flushSave() {
+          if (this.saveTimer) {
+            clearTimeout(this.saveTimer);
+            this.saveTimer = null;
+            if (this.saveState === 'dirty') await this.save();
+          }
+          // An in-flight save (or one queued behind it) still belongs to this
+          // page: wait for it to settle so navigation can't strand its outcome.
+          while (this.saving || this.saveAgain) {
+            await new Promise((r) => setTimeout(r, 50));
+          }
+          return this.saveState !== 'error';
         },
         // validate returns why the draft can't be persisted yet ('' when it can).
         // Auto-save holds while invalid instead of spamming the backend with 422s;
@@ -678,23 +697,45 @@
         // change → save → re-rank loop the unified page is built around.
         async save() {
           this.saveTimer = null;
+          // Serialize: a save landing while another is in flight would let two
+          // PUTs complete out of order and persist the older body. The later one
+          // waits its turn instead.
+          if (this.saving) { this.saveAgain = true; return; }
           const why = this.validate();
           if (why) { this.saveState = 'blocked'; this.blockReason = why; this.saveError = ''; return; }
+          // Snapshot everything the request needs NOW: after the await the user
+          // may have navigated, and this save must neither target the new page's
+          // title nor write its outcome into state it no longer owns.
+          const epoch = this.epoch;
+          const created = this.created;
+          const url = created ? 'decisions/' + encodeURIComponent(this.title) : 'decisions';
+          const body = JSON.stringify(this.build());
+          this.saving = true;
           this.saveState = 'saving'; this.saveError = '';
-          const url = this.created ? 'decisions/' + encodeURIComponent(this.title) : 'decisions';
-          const res = await apiFetch(url, {
-            method: this.created ? 'PUT' : 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(this.build()),
-          });
-          if (!res.ok) {
-            this.saveState = 'error';
-            this.saveError = (await res.text()) || ('HTTP ' + res.status);
-            return;
+          try {
+            const res = await apiFetch(url, {
+              method: created ? 'PUT' : 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: body,
+            });
+            if (epoch !== this.epoch) return; // page moved on; drop the outcome
+            if (!res.ok) {
+              this.saveState = 'error';
+              this.saveError = (await res.text()) || ('HTTP ' + res.status);
+              return;
+            }
+            this.created = true;
+            this.saveState = 'saved';
+            await this.refreshRank();
+          } finally {
+            this.saving = false;
+            // A change arrived mid-flight: run the save it asked for, unless the
+            // page navigated away in the meantime.
+            if (this.saveAgain) {
+              this.saveAgain = false;
+              if (epoch === this.epoch) await this.save();
+            }
           }
-          this.created = true;
-          this.saveState = 'saved';
-          await this.refreshRank();
         },
       },
     }).mount('#app');

@@ -102,6 +102,11 @@ func TestServeHandlerCreateDecisionThroughSPA(t *testing.T) {
 	if !strings.Contains(body, "'POST'") || !strings.Contains(body, "apiFetch(url") {
 		t.Fatalf("SPA shell does not POST a new decision to decisions:\n%s", body)
 	}
+	// Auto-save must pick POST for the first save of a new decision and PUT after
+	// — a shell that always PUTs would 404 every new decision (PUT never creates).
+	if !strings.Contains(body, "created ? 'PUT' : 'POST'") {
+		t.Fatalf("SPA shell lost the POST-first/PUT-after method selection:\n%s", body)
+	}
 
 	// The body below is the exact JSON shape the form assembles: field names match
 	// the Go struct (Direction serializes as its keyword), Scores keyed by criterion
