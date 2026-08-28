@@ -81,6 +81,24 @@
     ul.decisions a:hover { border-color: var(--accent); text-decoration: none; }
     .toolbar { margin-bottom: 1.2rem; }
 
+    /* Ranking panel: sticky so the result stays in view while the criteria and
+       options below are tuned — the whole point of the unified page. */
+    .rankpanel {
+      position: sticky; top: 0; z-index: 5; background: var(--bg);
+      padding: 0.5rem 0 0.7rem; border-bottom: 1px solid var(--line);
+      margin-bottom: 0.8rem;
+    }
+    .rankpanel h2 { margin-bottom: 0.4rem; }
+    /* Save-state chip: auto-save without feedback breeds distrust, so the current
+       state (saving / saved / why it's holding) is always one glance away. */
+    .status {
+      font-size: 0.72rem; font-weight: 500; padding: 0.1rem 0.55rem;
+      border-radius: 1rem; border: 1px solid var(--line); color: var(--muted);
+    }
+    .status.saving { color: var(--accent); border-color: var(--accent); }
+    .status.saved { color: var(--good); border-color: var(--good); }
+    .status.error { color: var(--danger); border-color: var(--danger); }
+
     /* Ranking table */
     table { border-collapse: collapse; width: 100%; margin-top: 0.5rem; }
     th, td { text-align: left; padding: 0.5rem 0.7rem; border-bottom: 1px solid var(--line); }
@@ -96,7 +114,7 @@
     }
     .bar > span { display: block; height: 100%; border-radius: 0.4rem; background: var(--accent); }
 
-    /* Edit view */
+    /* Decision form */
     fieldset {
       border: 1px solid var(--line); border-radius: 0.7rem; margin: 1rem 0; padding: 0.9rem 1rem;
       background: var(--card);
@@ -150,37 +168,50 @@
     .weightbar { width: 8rem; }
 
     .actions { margin-top: 1.4rem; display: flex; gap: 0.75rem; align-items: center; }
+
+    /* Title dialog: a new decision needs its identity up front, because auto-save
+       PUTs to /decisions/<title> — letting someone build first and title later
+       would silently hold every save. */
+    .overlay {
+      position: fixed; inset: 0; background: rgba(0, 0, 0, 0.35); z-index: 10;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .dialog {
+      background: var(--card); border: 1px solid var(--line); border-radius: 0.8rem;
+      padding: 1.2rem 1.4rem 1.1rem; min-width: 18rem; box-shadow: 0 8px 30px rgba(0,0,0,0.25);
+    }
+    .dialog h2 { margin-bottom: 0.8rem; }
+    .dialog .actions { margin-top: 1rem; }
   </style>
 </head>
 <body>
   <div id="app">
     <h1>pondera <small>rank options by weighted values</small></h1>
 
-    <!-- Ranking view: an existing decision opened from the list. -->
-    <template v-if="chosen">
+    <!-- Decision view: ranking and configuration unified on one page. The ranking
+         panel sticks to the top while the always-editable criteria and options
+         below auto-save and re-rank on every change. -->
+    <template v-if="view === 'decision'">
       <button class="ghost" @click="backToList">&larr; all decisions</button>
-      <h2>{{ chosen }} <button class="small" @click="startEdit(chosen)">edit</button></h2>
-      <p v-if="rankError" class="error">Can't rank yet: {{ rankError }}</p>
-      <table v-else-if="ranking.length">
-        <thead><tr><th>#</th><th>Option</th><th class="score">Score</th></tr></thead>
-        <tbody>
-          <tr v-for="(r, i) in ranking" :key="r.option">
-            <td class="rankno">{{ i + 1 }}</td><td>{{ r.option }}</td>
-            <td class="score">
-              <span class="bar"><span :style="{ width: r.score + '%' }"></span></span>{{ r.score.toFixed(2) }}
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </template>
 
-    <!-- Editing view: build a decision, then POST (new) or PUT (existing) it. -->
-    <template v-else-if="editing">
-      <button class="ghost" @click="cancelEdit">&larr; all decisions</button>
-      <h2>{{ mode === 'edit' ? 'Edit ' + draft.title : 'New decision' }}</h2>
-
-      <div class="row" v-if="mode !== 'edit'">
-        <label>Title <input class="name" v-model="draft.title" placeholder="pick-laptop"></label>
+      <div class="rankpanel">
+        <h2>
+          {{ title }}
+          <span class="status" :class="saveState">{{ statusLabel }}</span>
+        </h2>
+        <p v-if="rankError" class="hint">Can't rank yet: {{ rankError }}</p>
+        <table v-else-if="ranking.length">
+          <thead><tr><th>#</th><th>Option</th><th class="score">Score</th></tr></thead>
+          <tbody>
+            <tr v-for="(r, i) in ranking" :key="r.option">
+              <td class="rankno">{{ i + 1 }}</td><td>{{ r.option }}</td>
+              <td class="score">
+                <span class="bar"><span :style="{ width: r.score + '%' }"></span></span>{{ r.score.toFixed(2) }}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <p v-else class="hint">The ranking appears here as soon as the decision below is complete.</p>
       </div>
 
       <fieldset>
@@ -239,13 +270,9 @@
       </fieldset>
 
       <p v-if="saveError" class="error">{{ saveError }}</p>
-      <div class="actions">
-        <button class="primary" @click="save">{{ mode === 'edit' ? 'Save & re-rank' : 'Create decision' }}</button>
-        <button @click="cancelEdit">Cancel</button>
-      </div>
     </template>
 
-    <!-- List view: pick a decision to rank, or start a new one. -->
+    <!-- List view: pick a decision, or start a new one (title dialog first). -->
     <template v-else>
       <div class="toolbar"><button class="primary" @click="startCreate">+ New decision</button></div>
       <p v-if="loadError" class="error">{{ loadError }}</p>
@@ -254,6 +281,21 @@
         <li v-for="t in decisions" :key="t"><a @click="open(t)">{{ t }}</a></li>
       </ul>
     </template>
+
+    <!-- New-decision title dialog: the title is the document's identity (auto-save
+         targets /decisions/<title>), so it is asked for before the page opens —
+         skipping it would leave auto-save silently disabled. -->
+    <div v-if="showTitleDialog" class="overlay" @click.self="showTitleDialog = false">
+      <div class="dialog">
+        <h2>New decision</h2>
+        <label>Title <input class="name" v-model="newTitle" placeholder="pick-laptop" @keyup.enter="confirmCreate" ref="titleInput"></label>
+        <p v-if="dialogError" class="error">{{ dialogError }}</p>
+        <div class="actions">
+          <button class="primary" @click="confirmCreate">Create</button>
+          <button @click="showTitleDialog = false">Cancel</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script>
@@ -315,39 +357,70 @@
     createApp({
       data() {
         return {
-          decisions: [], chosen: null, ranking: [], loadError: '', rankError: '',
-          editing: false, mode: 'create', draft: blankDraft(), saveError: '',
+          decisions: [], loadError: '',
+          view: 'list', title: '', draft: blankDraft(),
+          ranking: [], rankError: '',
+          // created flips after the first successful POST: from then on auto-save
+          // PUTs. loading suppresses the auto-save watcher while a decision is
+          // being (re)loaded programmatically, so opening never triggers a save.
+          created: false, loading: false,
+          saveState: 'saved', saveError: '', blockReason: '', saveTimer: null,
+          showTitleDialog: false, newTitle: '', dialogError: '',
         };
+      },
+      computed: {
+        statusLabel() {
+          switch (this.saveState) {
+            case 'saving': return 'saving…';
+            case 'saved': return 'saved';
+            case 'dirty': return 'unsaved changes';
+            case 'blocked': return 'unsaved — ' + this.blockReason;
+            case 'error': return 'save failed';
+            default: return '';
+          }
+        },
+      },
+      // The auto-save heart: any change to the draft (weights dragged, scores set,
+      // names typed) marks the page dirty and schedules a save. The watcher is deep
+      // because the draft is nested; the loading guard keeps programmatic loads
+      // from re-saving what was just fetched.
+      watch: {
+        draft: {
+          deep: true,
+          handler() {
+            if (this.view === 'decision' && !this.loading) this.scheduleSave();
+          },
+        },
       },
       async mounted() {
         await this.reload();
         // Deep-linking: the URL hash names the open decision, so a hash link boots
-        // straight into that ranking and browser back/forward move between the
+        // straight into that decision and browser back/forward move between the
         // list and an open decision — a link a demo can share or bookmark.
         window.addEventListener('hashchange', () => this.syncFromHash());
         await this.syncFromHash();
       },
       methods: {
-        // syncFromHash routes the URL hash to a view: empty → list, "edit" → new
-        // decision, "edit:<title>" → edit that decision, anything else → open that
-        // decision's ranking. The edit forms give the tune view a deep-link a demo
-        // can share and a headless test can render without a click. Guarded against
-        // re-opening what's already open, so setting the hash from open() below
-        // can't loop back into another fetch.
+        // syncFromHash routes the URL hash to a view: empty → list, "edit" → the
+        // new-decision dialog, "edit:<title>" (legacy deep-link, kept so old links
+        // and headless tests still land somewhere sensible) → that decision, and
+        // anything else → that decision's unified page. Guarded against re-opening
+        // what's already open, so setting the hash from open() below can't loop
+        // back into another fetch.
         async syncFromHash() {
-          const raw = decodeURIComponent(location.hash.replace(/^#/, ''));
-          if (raw === 'edit') { this.startCreate(); return; }
-          if (raw.startsWith('edit:')) {
-            const title = raw.slice(5);
-            if (this.editing && this.mode === 'edit' && this.draft.title === title) return;
-            await this.startEdit(title);
-            return;
-          }
-          if (!raw) { this.chosen = null; return; }
-          if (this.editing || this.chosen === raw) return;
+          let raw = decodeURIComponent(location.hash.replace(/^#/, ''));
+          if (raw === 'edit') { this.view = 'list'; this.startCreate(); return; }
+          if (raw.startsWith('edit:')) raw = raw.slice(5);
+          if (!raw) { this.view = 'list'; return; }
+          if (this.view === 'decision' && this.title === raw) return;
           await this.open(raw, true);
         },
-        backToList() { this.chosen = null; if (location.hash) location.hash = ''; },
+        backToList() {
+          this.flushSave();
+          this.view = 'list'; this.title = '';
+          if (location.hash) location.hash = '';
+          this.reload();
+        },
         async reload() {
           try {
             const res = await apiFetch('decisions');
@@ -355,27 +428,23 @@
             this.decisions = await res.json();
           } catch (e) { this.loadError = 'Could not load decisions: ' + e.message; }
         },
+        // open loads a stored decision into the unified page: the ranking panel on
+        // top and the editable draft below it. Scores come back keyed by criterion
+        // NAME, but the form edits scores by row index, so remap by the criterion
+        // order. The per-criterion Range comes back as a two-element array; keep it
+        // so the UI can show and edit it.
         async open(title, fromHash) {
-          this.chosen = title; this.ranking = []; this.rankError = '';
+          this.flushSave();
+          this.loading = true;
+          this.view = 'decision'; this.title = title; this.created = true;
+          this.ranking = []; this.rankError = ''; this.saveError = ''; this.saveState = 'saved';
           if (!fromHash) location.hash = encodeURIComponent(title);
-          const res = await apiFetch('decisions/' + encodeURIComponent(title) + '/rank');
-          if (res.status === 422) { this.rankError = await res.text(); return; }
-          if (!res.ok) { this.rankError = 'HTTP ' + res.status; return; }
-          this.ranking = await res.json();
-        },
-        startCreate() {
-          this.draft = blankDraft(); this.mode = 'create'; this.saveError = ''; this.editing = true;
-        },
-        // startEdit loads the stored decision and reshapes it into the same draft
-        // the create form edits: Scores come back keyed by criterion NAME, but the
-        // form edits scores by row index, so remap by the criterion order. The
-        // per-criterion Range comes back as a two-element array; keep it so the UI
-        // can show and edit it. Opening this from the ranking view is the
-        // edit-and-re-rank loop's front door.
-        async startEdit(title) {
-          this.saveError = '';
           const res = await apiFetch('decisions/' + encodeURIComponent(title));
-          if (!res.ok) { this.rankError = 'Could not load to edit: HTTP ' + res.status; return; }
+          if (!res.ok) {
+            this.rankError = 'Could not load decision: HTTP ' + res.status;
+            this.$nextTick(() => { this.loading = false; });
+            return;
+          }
           const d = await res.json();
           this.draft = {
             title: d.title,
@@ -389,12 +458,67 @@
             })),
           };
           // Stored weights are raw (any positive numbers); rescale them to shares
-          // summing to 100 so the tune view speaks percentages. Rank normalizes by
-          // the weight total anyway, so this preserves the decision's ranking.
+          // summing to 100 so the page speaks percentages. Rank normalizes by the
+          // weight total anyway, so this preserves the decision's ranking.
           this.normalizeWeights();
-          this.mode = 'edit'; this.chosen = null; this.editing = true;
+          await this.refreshRank();
+          this.$nextTick(() => { this.loading = false; });
         },
-        cancelEdit() { this.editing = false; },
+        async refreshRank() {
+          const res = await apiFetch('decisions/' + encodeURIComponent(this.title) + '/rank');
+          if (res.status === 422) { this.rankError = await res.text(); this.ranking = []; return; }
+          if (!res.ok) { this.rankError = 'HTTP ' + res.status; this.ranking = []; return; }
+          this.ranking = await res.json();
+          this.rankError = '';
+        },
+        startCreate() {
+          this.newTitle = ''; this.dialogError = ''; this.showTitleDialog = true;
+          this.$nextTick(() => { const el = this.$refs.titleInput; if (el) el.focus(); });
+        },
+        // confirmCreate opens the unified page for a brand-new decision. Nothing is
+        // POSTed yet: the first auto-save fires once the draft is valid (criteria
+        // and options named), and the status chip explains what it's waiting for.
+        confirmCreate() {
+          const t = this.newTitle.trim();
+          if (!t) { this.dialogError = 'Give the decision a title — it names its file.'; return; }
+          if (this.decisions.includes(t)) { this.dialogError = 'A decision with this title already exists.'; return; }
+          this.showTitleDialog = false;
+          this.loading = true;
+          this.view = 'decision'; this.title = t; this.created = false;
+          this.draft = blankDraft(); this.draft.title = t;
+          this.ranking = []; this.rankError = ''; this.saveError = '';
+          this.saveState = 'blocked'; this.blockReason = this.validate();
+          location.hash = encodeURIComponent(t);
+          this.$nextTick(() => { this.loading = false; });
+        },
+        // scheduleSave debounces the auto-save: the state flips to dirty at once
+        // (honest feedback), and the save itself runs after the changes settle, so
+        // a drag emits one PUT instead of dozens.
+        scheduleSave() {
+          this.saveState = 'dirty';
+          clearTimeout(this.saveTimer);
+          this.saveTimer = setTimeout(() => this.save(), 600);
+        },
+        // flushSave runs a pending debounced save immediately — used when leaving
+        // the page so the last edit isn't lost to the timer.
+        flushSave() {
+          if (!this.saveTimer) return;
+          clearTimeout(this.saveTimer);
+          this.saveTimer = null;
+          if (this.saveState === 'dirty') this.save();
+        },
+        // validate returns why the draft can't be persisted yet ('' when it can).
+        // Auto-save holds while invalid instead of spamming the backend with 422s;
+        // the reason surfaces in the status chip.
+        validate() {
+          const cnames = this.draft.criteria.map((c) => c.name.trim());
+          if (cnames.some((n) => !n)) return 'name every criterion';
+          if (new Set(cnames).size !== cnames.length) return 'criterion names must be unique';
+          const onames = this.draft.options.map((o) => o.name.trim());
+          if (onames.some((n) => !n)) return 'name every option';
+          if (new Set(onames).size !== onames.length) return 'option names must be unique';
+          return '';
+        },
         addCriterion() {
           this.draft.criteria.push({ name: '', weight: 0, direction: 'benefit', range: [0, 100] });
           // Give the newcomer an equal slice; the others shrink proportionally to keep the sum at 100.
@@ -411,7 +535,7 @@
         // setWeight sets criterion i's share to v (a whole-number 0–100) and rescales
         // the other criteria so every weight still sums to exactly 100 — raise one and
         // the rest fall proportionally. Shares are kept as integers (rounded to sum 100
-        // via largestRemainder) so the tune view reads as clean percentages. When the
+        // via largestRemainder) so the page reads as clean percentages. When the
         // others are all zero it splits the remainder evenly, recovering from 100/0.
         setWeight(i, raw) {
           const crit = this.draft.criteria;
@@ -535,7 +659,7 @@
         // (the form edits scores by row index, so remap here).
         build() {
           return {
-            title: this.draft.title.trim(),
+            title: this.title.trim(),
             criteria: this.draft.criteria.map((c) => ({
               name: c.name.trim(), weight: Number(c.weight) || 0, direction: c.direction,
               range: c.range.map((a) => (a === 'min' || a === 'max' ? a : Number(a))),
@@ -547,25 +671,30 @@
             }),
           };
         },
-        // save persists the draft: POST a new decision, or PUT an existing one when
-        // editing. Identity for a PUT is the title in the path, so the backend
-        // ignores the body's owner/title. Either way we drop straight into the
-        // ranking view for that decision — a new decision opens to its ranking
-        // instead of dumping the user back on the list.
+        // save persists the draft: the first successful save of a new decision is a
+        // POST, every save after that PUTs to the same title (identity comes from
+        // the path). Invalid drafts hold instead of erroring — the status chip says
+        // why. After a successful save the ranking panel refreshes, closing the
+        // change → save → re-rank loop the unified page is built around.
         async save() {
-          this.saveError = '';
-          const editing = this.mode === 'edit';
-          const title = this.draft.title.trim();
-          const url = editing ? 'decisions/' + encodeURIComponent(title) : 'decisions';
+          this.saveTimer = null;
+          const why = this.validate();
+          if (why) { this.saveState = 'blocked'; this.blockReason = why; this.saveError = ''; return; }
+          this.saveState = 'saving'; this.saveError = '';
+          const url = this.created ? 'decisions/' + encodeURIComponent(this.title) : 'decisions';
           const res = await apiFetch(url, {
-            method: editing ? 'PUT' : 'POST',
+            method: this.created ? 'PUT' : 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(this.build()),
           });
-          if (!res.ok) { this.saveError = (await res.text()) || ('HTTP ' + res.status); return; }
-          this.editing = false;
-          await this.reload();
-          await this.open(title);
+          if (!res.ok) {
+            this.saveState = 'error';
+            this.saveError = (await res.text()) || ('HTTP ' + res.status);
+            return;
+          }
+          this.created = true;
+          this.saveState = 'saved';
+          await this.refreshRank();
         },
       },
     }).mount('#app');

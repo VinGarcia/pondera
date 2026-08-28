@@ -93,6 +93,12 @@ func TestServeHandlerCreateDecisionThroughSPA(t *testing.T) {
 	if !strings.Contains(body, `@click="startCreate`) {
 		t.Fatalf("SPA shell has no create affordance (startCreate):\n%s", body)
 	}
+	// Creation asks for the title up front (a dialog): the title is the document's
+	// identity, and auto-save silently holds without one — the frustration the
+	// dialog exists to prevent.
+	if !strings.Contains(body, "confirmCreate") {
+		t.Fatalf("SPA shell has no title dialog for new decisions (confirmCreate):\n%s", body)
+	}
 	if !strings.Contains(body, "'POST'") || !strings.Contains(body, "apiFetch(url") {
 		t.Fatalf("SPA shell does not POST a new decision to decisions:\n%s", body)
 	}
@@ -138,14 +144,16 @@ func TestServeHandlerCreateDecisionThroughSPA(t *testing.T) {
 
 // TestServeHandlerEditDecisionThroughSPA closes the demo loop Vini asked for: from
 // `pond serve` a person opens an existing decision, changes a weight, and sees the
-// ranking re-order — a decision tool is only useful if you can tune it. Two things
-// must hold together. First, the ranking view must host an edit affordance wired to
-// PUT /decisions/{title}; a page that can only read the frozen ranking cannot be
-// tuned. Second, the anti-sprint#28 guard: the exact JSON body the edit form builds,
-// PUT through the serve mux (not the server package in isolation), must replace the
-// stored decision and re-rank — proving the route the front calls exists and takes
-// what the front sends. The edit flips the dominant weight, so the winner changes:
-// a PUT that never reached Save(), or a rank that echoed the old file, would fail.
+// ranking re-order — a decision tool is only useful if you can tune it. Since the
+// unified page, tuning has no edit button: the decision view is always editable and
+// an auto-save watcher PUTs the draft to /decisions/{title} as changes settle. Two
+// things must hold together. First, the shell must carry that auto-save wiring — a
+// page without it can only read the frozen ranking. Second, the anti-sprint#28
+// guard: the exact JSON body the form builds, PUT through the serve mux (not the
+// server package in isolation), must replace the stored decision and re-rank —
+// proving the route the front calls exists and takes what the front sends. The edit
+// flips the dominant weight, so the winner changes: a PUT that never reached
+// Save(), or a rank that echoed the old file, would fail.
 func TestServeHandlerEditDecisionThroughSPA(t *testing.T) {
 	store := pondera.NewFileStore(t.TempDir())
 	// A decision whose winner is decided purely by which criterion carries the
@@ -168,11 +176,11 @@ func TestServeHandlerEditDecisionThroughSPA(t *testing.T) {
 	}
 	h := serveHandler(store, "local")
 
-	// The ranking view must carry an edit affordance pointed at the update route, or
-	// a demo decision can be read but never tuned.
+	// The decision page must carry the auto-save wiring pointed at the update
+	// route, or a demo decision can be read but never tuned.
 	body := httptestGet(h, "/").Body.String()
-	if !strings.Contains(body, `@click="startEdit`) {
-		t.Fatalf("SPA shell has no edit affordance (startEdit):\n%s", body)
+	if !strings.Contains(body, "scheduleSave") {
+		t.Fatalf("SPA shell has no auto-save affordance (scheduleSave):\n%s", body)
 	}
 	if !strings.Contains(body, "'PUT'") {
 		t.Fatalf("SPA shell does not PUT an edited decision:\n%s", body)
