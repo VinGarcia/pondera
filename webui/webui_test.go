@@ -53,4 +53,12 @@ func TestExportedAssetsAreEmbedded(t *testing.T) {
 	if !strings.Contains(string(webui.Index), "apiFetch") {
 		t.Fatal("SPA shell is missing the apiFetch auth wrapper")
 	}
+	// The config placeholder is the seam a gateway host injects PONDERA_AUTH_URL
+	// through; without it the login redirect can never be turned on.
+	if !strings.Contains(string(webui.Index), "<!--PONDERA_CONFIG-->") {
+		t.Fatal("SPA shell is missing the PONDERA_CONFIG injection placeholder")
+	}
+	if !strings.Contains(string(webui.Index), "PONDERA_AUTH_URL") {
+		t.Fatal("SPA shell is missing the auth bootstrap")
+	}
 }

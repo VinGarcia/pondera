@@ -4,6 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>pondera — rank options by weighted values</title>
+  <!-- A host that fronts pondera with an auth gateway injects a config script
+       here (setting window.PONDERA_AUTH_URL); standalone `pond serve` leaves it
+       untouched and stays single-user with no login. -->
+  <!--PONDERA_CONFIG-->
   <!-- Vue 3 vendored and served from the same origin (see serve.go): the whole SPA
        ships in the one binary, no build step and no CDN, so `pond serve` boots with
        no network — all a family-demo machine needs. -->
@@ -254,17 +258,51 @@
 
   <script>
     const { createApp } = Vue;
-    // apiFetch is fetch with the auth token attached when there is one. Standalone
-    // `pond serve` runs behind a single-owner proxy and sets no token, so the
-    // header is simply absent and nothing changes; a cluster host that requires a
-    // JWT drops the token in localStorage under `ponderaToken` and every call
-    // carries `Authorization: Bearer <token>`. Same UI, both worlds.
-    const apiFetch = (path, opts = {}) => {
-      const token = localStorage.getItem('ponderaToken');
-      if (!token) return fetch(path, opts);
+    // Auth is active only when a host injects window.PONDERA_AUTH_URL (the cluster
+    // does; standalone `pond serve` does not, staying single-user with no login).
+    // When active, the token arrives as the ?token= the auth service redirects
+    // back with; we store it and send unauthenticated visitors to the login page.
+    const AUTH_URL = (window.PONDERA_AUTH_URL || '').replace(/\/+$/, '');
+    const TOKEN_KEY = 'ponderaToken';
+    const goToLogin = () => {
+      location.href = AUTH_URL + '/login?redirect=' + encodeURIComponent(location.href);
+    };
+    const jwtExpired = (t) => {
+      try {
+        const payload = t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+        const { exp } = JSON.parse(atob(payload));
+        return typeof exp === 'number' && exp * 1000 <= Date.now();
+      } catch (_) { return true; }
+    };
+    if (AUTH_URL) {
+      const params = new URLSearchParams(location.search);
+      const fresh = params.get('token');
+      if (fresh) {
+        localStorage.setItem(TOKEN_KEY, fresh);
+        params.delete('token');
+        const qs = params.toString();
+        history.replaceState({}, '', location.pathname + (qs ? '?' + qs : '') + location.hash);
+      }
+      const token = localStorage.getItem(TOKEN_KEY);
+      if (!token || jwtExpired(token)) {
+        localStorage.removeItem(TOKEN_KEY);
+        goToLogin();
+      }
+    }
+    // apiFetch is fetch with the Bearer token attached when there is one. Standalone
+    // sets no token, so the header is simply absent and nothing changes. Under auth,
+    // a 401 means the token was rejected or expired mid-session: clear it and bounce
+    // to login so the user re-authenticates instead of seeing silent failures.
+    const apiFetch = async (path, opts = {}) => {
+      const token = localStorage.getItem(TOKEN_KEY);
       const headers = new Headers(opts.headers || {});
-      headers.set('Authorization', 'Bearer ' + token);
-      return fetch(path, { ...opts, headers });
+      if (token) headers.set('Authorization', 'Bearer ' + token);
+      const res = await fetch(path, { ...opts, headers });
+      if (res.status === 401 && AUTH_URL) {
+        localStorage.removeItem(TOKEN_KEY);
+        goToLogin();
+      }
+      return res;
     };
     // Weights are shares that always sum to 100: the drag bar and number input
     // both span 0–100, and setWeight redistributes the rest proportionally, so
