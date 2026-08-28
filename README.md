@@ -108,4 +108,33 @@ pond add-option    --name N <file>                           add an alternative 
 pond score         --option O --criterion C --value V <file>
 pond rank          <file>                                    print the ranking
 pond show          <file>                                    print current state
+pond serve         [--addr :8080] [--dir .] [--owner local]  serve the web UI + API
+```
+
+## Running the local server
+
+`pond serve` runs the web UI (a Vue SPA embedded in the binary) plus the JSON
+API over the decision files in a directory:
+
+```console
+$ pond serve
+pondera serving . on http://localhost:8080 (owner "local")
+```
+
+Open http://localhost:8080 to browse, create, and rank decisions from the
+browser — rankings come from the same `Rank()` the CLI prints, never
+re-implemented in JavaScript. Flags:
+
+- `--addr` — address to listen on (default `:8080`).
+- `--dir` — directory holding the decision `.toml` files (default `.`); the
+  same files the CLI reads and writes, so both can work side by side.
+- `--owner` — the single owner every decision is scoped to (default `local`).
+  Multi-user deployments belong behind an authenticating proxy; see the
+  `server` package docs for that boundary.
+
+Alternatively, with Docker (the image is the static binary on `scratch`):
+
+```console
+$ docker build -t pondera .
+$ docker run -p 8080:8080 -v "$PWD:/data" pondera
 ```
