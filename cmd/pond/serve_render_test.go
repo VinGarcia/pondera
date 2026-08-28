@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sylgarcia00/pondera"
+	"github.com/vingarcia/pondera"
 )
 
 // chromeDumpDOM renders url in headless Chrome and returns the post-JavaScript

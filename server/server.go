@@ -10,7 +10,7 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/sylgarcia00/pondera"
+	"github.com/vingarcia/pondera"
 )
 
 // OwnerFunc extracts the owner identity from a request. The host chooses how:

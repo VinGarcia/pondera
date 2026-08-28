@@ -6,9 +6,9 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/sylgarcia00/pondera"
-	"github.com/sylgarcia00/pondera/server"
-	"github.com/sylgarcia00/pondera/webui"
+	"github.com/vingarcia/pondera"
+	"github.com/vingarcia/pondera/server"
+	"github.com/vingarcia/pondera/webui"
 )
 
 // serveHandler builds the http.Handler `pond serve` puts in front of the

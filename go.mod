@@ -1,4 +1,4 @@
-module github.com/sylgarcia00/pondera
+module github.com/vingarcia/pondera
 
 go 1.26.5
 

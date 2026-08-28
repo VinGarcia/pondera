@@ -24,7 +24,7 @@ import (
 	"math"
 	"os"
 
-	"github.com/sylgarcia00/pondera"
+	"github.com/vingarcia/pondera"
 )
 
 func main() {

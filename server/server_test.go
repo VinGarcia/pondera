@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sylgarcia00/pondera"
-	"github.com/sylgarcia00/pondera/server"
+	"github.com/vingarcia/pondera"
+	"github.com/vingarcia/pondera/server"
 )
 
 // seed writes one minimal decision owned by owner with the given title into

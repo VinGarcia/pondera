@@ -11,7 +11,7 @@ diff, and defend.
 The CLI binary is `pond` (short for pondera):
 
 ```
-go install github.com/sylgarcia00/pondera/cmd/pond@latest
+go install github.com/vingarcia/pondera/cmd/pond@latest
 ```
 
 ## Criteria

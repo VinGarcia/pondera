@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sylgarcia00/pondera"
+	"github.com/vingarcia/pondera"
 )
 
 // TestServeHandlerServesSPAAndAPI is the fatia-4 foundation: `pond serve` puts

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sylgarcia00/pondera/webui"
+	"github.com/vingarcia/pondera/webui"
 )
 
 func TestHandlerServesTheSPAAndRuntime(t *testing.T) {
