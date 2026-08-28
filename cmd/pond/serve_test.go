@@ -93,7 +93,7 @@ func TestServeHandlerCreateDecisionThroughSPA(t *testing.T) {
 	if !strings.Contains(body, `@click="startCreate`) {
 		t.Fatalf("SPA shell has no create affordance (startCreate):\n%s", body)
 	}
-	if !strings.Contains(body, "'POST'") || !strings.Contains(body, "fetch(url") {
+	if !strings.Contains(body, "'POST'") || !strings.Contains(body, "apiFetch(url") {
 		t.Fatalf("SPA shell does not POST a new decision to decisions:\n%s", body)
 	}
 

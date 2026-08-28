@@ -1,7 +1,6 @@
 package main
 
 import (
-	_ "embed"
 	"flag"
 	"fmt"
 	"net/http"
@@ -9,23 +8,14 @@ import (
 
 	"github.com/sylgarcia00/pondera"
 	"github.com/sylgarcia00/pondera/server"
+	"github.com/sylgarcia00/pondera/webui"
 )
-
-// spaIndex is the single-file Vue SPA and vueRuntime is the Vue library it loads,
-// both embedded so `pond serve` ships as one binary with no build step, no asset
-// directory to lose, and no CDN to be unreachable at demo time — the whole app
-// boots with no network on a desktop family machine.
-//
-//go:embed web/index.html
-var spaIndex []byte
-
-//go:embed web/vue.global.prod.js
-var vueRuntime []byte
 
 // serveHandler builds the http.Handler `pond serve` puts in front of the
 // browser: the embedded SPA at the root and the decision API on the same origin,
 // every API request scoped to owner. Factoring it out of cmdServe lets tests
-// drive it with httptest instead of binding a port.
+// drive it with httptest instead of binding a port. The SPA itself lives in the
+// webui package so a cluster service can mount the exact same UI.
 //
 // pondera itself does not authenticate; here the desktop host injects a single
 // fixed owner because the demo is one person on one machine. A multi-user
@@ -38,20 +28,9 @@ func serveHandler(store pondera.Store, owner string) http.Handler {
 	// to it, so registering the same handler on the prefixes is enough.
 	mux.Handle("/decisions", api)
 	mux.Handle("/decisions/", api)
-	// The Vue runtime the shell loads, served from the same origin so the page has
-	// no off-site dependency. Explicit route (not a FileServer) keeps the served
-	// surface to exactly the two embedded files.
-	mux.HandleFunc("GET /vue.global.prod.js", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
-		_, _ = w.Write(vueRuntime)
-	})
-	// Everything else is the SPA shell. {$} matches only the exact root so the
-	// API prefixes above take precedence; the shell drives all navigation
-	// client-side from there.
-	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write(spaIndex)
-	})
+	// Everything else — the SPA shell at the root and the Vue runtime — is the
+	// webui package's; the API prefixes above take precedence over its root route.
+	mux.Handle("/", webui.Handler())
 	return mux
 }
 

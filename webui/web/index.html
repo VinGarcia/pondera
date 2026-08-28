@@ -254,6 +254,18 @@
 
   <script>
     const { createApp } = Vue;
+    // apiFetch is fetch with the auth token attached when there is one. Standalone
+    // `pond serve` runs behind a single-owner proxy and sets no token, so the
+    // header is simply absent and nothing changes; a cluster host that requires a
+    // JWT drops the token in localStorage under `ponderaToken` and every call
+    // carries `Authorization: Bearer <token>`. Same UI, both worlds.
+    const apiFetch = (path, opts = {}) => {
+      const token = localStorage.getItem('ponderaToken');
+      if (!token) return fetch(path, opts);
+      const headers = new Headers(opts.headers || {});
+      headers.set('Authorization', 'Bearer ' + token);
+      return fetch(path, { ...opts, headers });
+    };
     // Weights are shares that always sum to 100: the drag bar and number input
     // both span 0–100, and setWeight redistributes the rest proportionally, so
     // "how much this criterion matters" reads directly as a percentage.
@@ -300,7 +312,7 @@
         backToList() { this.chosen = null; if (location.hash) location.hash = ''; },
         async reload() {
           try {
-            const res = await fetch('decisions');
+            const res = await apiFetch('decisions');
             if (!res.ok) throw new Error('HTTP ' + res.status);
             this.decisions = await res.json();
           } catch (e) { this.loadError = 'Could not load decisions: ' + e.message; }
@@ -308,7 +320,7 @@
         async open(title, fromHash) {
           this.chosen = title; this.ranking = []; this.rankError = '';
           if (!fromHash) location.hash = encodeURIComponent(title);
-          const res = await fetch('decisions/' + encodeURIComponent(title) + '/rank');
+          const res = await apiFetch('decisions/' + encodeURIComponent(title) + '/rank');
           if (res.status === 422) { this.rankError = await res.text(); return; }
           if (!res.ok) { this.rankError = 'HTTP ' + res.status; return; }
           this.ranking = await res.json();
@@ -324,7 +336,7 @@
         // edit-and-re-rank loop's front door.
         async startEdit(title) {
           this.saveError = '';
-          const res = await fetch('decisions/' + encodeURIComponent(title));
+          const res = await apiFetch('decisions/' + encodeURIComponent(title));
           if (!res.ok) { this.rankError = 'Could not load to edit: HTTP ' + res.status; return; }
           const d = await res.json();
           this.draft = {
@@ -507,7 +519,7 @@
           const editing = this.mode === 'edit';
           const title = this.draft.title.trim();
           const url = editing ? 'decisions/' + encodeURIComponent(title) : 'decisions';
-          const res = await fetch(url, {
+          const res = await apiFetch(url, {
             method: editing ? 'PUT' : 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(this.build()),
