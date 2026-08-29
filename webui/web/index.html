@@ -71,6 +71,16 @@
     button.rm:hover { text-decoration: underline; }
     button.small { padding: 0.25rem 0.6rem; font-size: 0.85rem; }
 
+    /* Account button sits top-right, above the title, out of the working area. */
+    .account { display: flex; justify-content: flex-end; margin-bottom: 0.4rem; }
+    /* Demo banner: a soft info strip, discreet enough not to compete with the app
+       but clear about where the decisions are going. Reuses the accent-soft var. */
+    .demobar {
+      background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+      color: var(--ink); padding: 0.55rem 0.8rem; border-radius: 0.5rem;
+      margin: 0 0 1.2rem; font-size: 0.85rem;
+    }
+
     /* List view */
     ul.decisions { list-style: none; padding: 0; margin: 0; }
     ul.decisions li { padding: 0; margin: 0.35rem 0; }
@@ -204,7 +214,23 @@
 </head>
 <body>
   <div id="app">
+    <!-- Account row: demo offers a way in, auth a way out. Standalone shows
+         nothing — there is no account to act on. -->
+    <div class="account" v-if="mode !== 'standalone'">
+      <button v-if="mode === 'demo'" class="small" @click="signIn">Sign in</button>
+      <button v-else-if="mode === 'auth'" class="small ghost" @click="logOut">Log out</button>
+    </div>
+
     <h1>Pondera <small>rank options by weighted values</small></h1>
+
+    <!-- Demo banner: this is the open demo — decisions live in a shared public
+         keyspace addressable by anyone with the per-browser id, not a private
+         store, so the copy promises neither locality nor privacy. Signing in is
+         offered as the path to a real account (demo decisions do not migrate). -->
+    <p v-if="mode === 'demo'" class="demobar">
+      You're trying Pondera in demo mode — no login needed.
+      <button class="link" @click="signIn">Sign in</button> for a permanent account.
+    </p>
 
     <!-- Decision view: ranking and configuration unified on one page. The ranking
          panel sticks to the top while the always-editable criteria and options
@@ -328,12 +354,22 @@
 
   <script>
     const { createApp } = Vue;
-    // Auth is active only when a host injects window.PONDERA_AUTH_URL (the cluster
-    // does; standalone `pond serve` does not, staying single-user with no login).
-    // When active, the token arrives as the ?token= the auth service redirects
-    // back with; we store it and send unauthenticated visitors to the login page.
+    // The SPA runs in one of three modes, chosen from what the host injects into
+    // <!--PONDERA_CONFIG-->:
+    //   auth       — window.PONDERA_AUTH_URL set and the visitor holds a live JWT:
+    //                unprefixed API, Bearer token, a Log out button.
+    //   demo       — window.PONDERA_DEMO set (its value is the public route prefix,
+    //                e.g. "public"): an unauthenticated visitor uses a shared public
+    //                keyspace, no login. The API is served under the prefix and every
+    //                request carries a per-browser X-Pondera-Public-Id.
+    //   standalone — neither injected (`pond serve`): single-user, no login.
+    // AUTH_URL set but no token and no demo is the auth-required-not-yet-signed-in
+    // case, which redirects to login exactly as before.
     const AUTH_URL = (window.PONDERA_AUTH_URL || '').replace(/\/+$/, '');
+    const DEMO_PREFIX = window.PONDERA_DEMO ? String(window.PONDERA_DEMO).replace(/^\/+|\/+$/g, '') : '';
+    const DEMO_ENABLED = !!DEMO_PREFIX;
     const TOKEN_KEY = 'ponderaToken';
+    const PUBLIC_ID_KEY = 'ponderaPublicId';
     const goToLogin = () => {
       location.href = AUTH_URL + '/login?redirect=' + encodeURIComponent(location.href);
     };
@@ -344,6 +380,9 @@
         return typeof exp === 'number' && exp * 1000 <= Date.now();
       } catch (_) { return true; }
     };
+    // Capture the ?token= the auth service redirects back with, before resolving the
+    // mode: a fresh login lands here with the token in the query, and stripping it
+    // keeps it out of history/bookmarks.
     if (AUTH_URL) {
       const params = new URLSearchParams(location.search);
       const fresh = params.get('token');
@@ -353,22 +392,46 @@
         const qs = params.toString();
         history.replaceState({}, '', location.pathname + (qs ? '?' + qs : '') + location.hash);
       }
-      const token = localStorage.getItem(TOKEN_KEY);
-      if (!token || jwtExpired(token)) {
-        localStorage.removeItem(TOKEN_KEY);
-        goToLogin();
-      }
     }
-    // apiFetch is fetch with the Bearer token attached when there is one. Standalone
-    // sets no token, so the header is simply absent and nothing changes. Under auth,
-    // a 401 means the token was rejected or expired mid-session: clear it and bounce
-    // to login so the user re-authenticates instead of seeing silent failures.
+    const token = localStorage.getItem(TOKEN_KEY);
+    const authed = !!token && !jwtExpired(token);
+    // API_BASE is prepended to every path in apiFetch, so call sites keep passing
+    // bare paths like 'decisions'. Demo mode targets the public prefix; auth and
+    // standalone hit the unprefixed API on the same origin.
+    let MODE, API_BASE = '', PUBLIC_ID = '';
+    if (authed) {
+      MODE = 'auth';
+    } else if (DEMO_ENABLED) {
+      MODE = 'demo';
+      API_BASE = DEMO_PREFIX + '/';
+      // One UUID per browser identifies the visitor's slice of the shared public
+      // keyspace. randomUUID emits the canonical RFC-4122 form the server requires.
+      PUBLIC_ID = localStorage.getItem(PUBLIC_ID_KEY) || '';
+      if (!PUBLIC_ID) {
+        PUBLIC_ID = crypto.randomUUID();
+        localStorage.setItem(PUBLIC_ID_KEY, PUBLIC_ID);
+      }
+    } else if (AUTH_URL) {
+      // Auth required, no demo fallback, not signed in: bounce to login as before.
+      localStorage.removeItem(TOKEN_KEY);
+      goToLogin();
+      MODE = 'auth';
+    } else {
+      MODE = 'standalone';
+    }
+    // Expose the mode to the template so it can show the demo banner and the
+    // account button without threading props through the app.
+    window.PONDERA_MODE = MODE;
+    // apiFetch is fetch scoped to the resolved mode: it prefixes the API base and
+    // attaches the mode's credential (auth → Bearer JWT; demo → the public id
+    // header; standalone → nothing). A 401 only bounces to login under auth: in
+    // demo mode there is nothing to re-authenticate, so never redirect on it.
     const apiFetch = async (path, opts = {}) => {
-      const token = localStorage.getItem(TOKEN_KEY);
       const headers = new Headers(opts.headers || {});
-      if (token) headers.set('Authorization', 'Bearer ' + token);
-      const res = await fetch(path, { ...opts, headers });
-      if (res.status === 401 && AUTH_URL) {
+      if (MODE === 'auth' && token) headers.set('Authorization', 'Bearer ' + token);
+      if (MODE === 'demo') headers.set('X-Pondera-Public-Id', PUBLIC_ID);
+      const res = await fetch(API_BASE + path, { ...opts, headers });
+      if (res.status === 401 && MODE === 'auth') {
         localStorage.removeItem(TOKEN_KEY);
         goToLogin();
       }
@@ -384,6 +447,9 @@
     createApp({
       data() {
         return {
+          // Resolved on boot from what the host injected; drives the account
+          // button and the demo banner.
+          mode: window.PONDERA_MODE,
           decisions: [], loadError: '',
           view: 'list', title: '', draft: blankDraft(),
           ranking: [], rankError: '',
@@ -434,6 +500,12 @@
         await this.syncFromHash();
       },
       methods: {
+        // Demo → login, keeping the current page as the redirect target so the
+        // user returns here signed in.
+        signIn() { goToLogin(); },
+        // Auth → drop the token and reload: the fresh boot re-resolves the mode to
+        // demo (if the host enables it) or to the login redirect.
+        logOut() { localStorage.removeItem(TOKEN_KEY); location.reload(); },
         // syncFromHash routes the URL hash to a view: empty → list, "edit" → the
         // new-decision dialog, "edit:<title>" (legacy deep-link, kept so old links
         // and headless tests still land somewhere sensible) → that decision, and
