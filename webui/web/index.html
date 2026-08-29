@@ -70,6 +70,15 @@
     button.rm { color: var(--danger); background: none; border: none; padding: 0.2rem 0.4rem; font-size: 0.85rem; }
     button.rm:hover { text-decoration: underline; }
     button.small { padding: 0.25rem 0.6rem; font-size: 0.85rem; }
+    /* Destructive action: outlined in danger, never filled, so deleting reads as
+       deliberate rather than an accent-colored primary the eye reaches for. */
+    button.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, var(--line)); }
+    button.danger:hover { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, transparent); }
+    button.danger[disabled] { opacity: 0.55; cursor: default; border-color: var(--line); background: var(--card); }
+
+    /* Delete lives apart from the auto-saving controls, behind a top rule, so a
+       wrong click can't land on it while editing — it opens a confirm dialog. */
+    .danger-zone { margin-top: 1.6rem; padding-top: 1rem; border-top: 1px solid var(--line); }
 
     /* Account button sits top-right, above the title, out of the working area. */
     .account { display: flex; justify-content: flex-end; margin-bottom: 0.4rem; }
@@ -324,6 +333,12 @@
       </fieldset>
 
       <p v-if="saveError" class="error">{{ saveError }}</p>
+
+      <!-- Only a stored decision can be deleted; a brand-new unsaved draft has
+           nothing on the server, so the action stays hidden until the first save. -->
+      <div v-if="created" class="danger-zone">
+        <button class="danger" @click="showDeleteDialog = true">Delete decision</button>
+      </div>
     </template>
 
     <!-- List view: pick a decision, or start a new one (title dialog first). -->
@@ -347,6 +362,21 @@
         <div class="actions">
           <button class="primary" @click="confirmCreate">Create</button>
           <button @click="showTitleDialog = false">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Delete confirmation: deleting is irreversible and the page auto-saves, so
+         the destructive action is gated behind an explicit confirm — the mirror of
+         the title dialog guarding creation. -->
+    <div v-if="showDeleteDialog" class="overlay" @click.self="deleting || (showDeleteDialog = false)">
+      <div class="dialog">
+        <h2>Delete decision</h2>
+        <p>Delete “{{ title }}”? This can't be undone.</p>
+        <p v-if="deleteError" class="error">{{ deleteError }}</p>
+        <div class="actions">
+          <button class="danger" @click="confirmDelete" :disabled="deleting">{{ deleting ? 'Deleting…' : 'Delete' }}</button>
+          <button @click="showDeleteDialog = false" :disabled="deleting">Cancel</button>
         </div>
       </div>
     </div>
@@ -465,6 +495,7 @@
           // a new decision opens expanded, since criteria are what it needs first.
           critsCollapsed: false,
           showTitleDialog: false, newTitle: '', dialogError: '',
+          showDeleteDialog: false, deleting: false, deleteError: '',
         };
       },
       computed: {
@@ -538,6 +569,38 @@
             if (!res.ok) throw new Error('HTTP ' + res.status);
             this.decisions = await res.json();
           } catch (e) { this.loadError = 'Could not load decisions: ' + e.message; }
+        },
+        // confirmDelete removes the open decision after the user confirms in the
+        // dialog. It first cancels any pending or in-flight auto-save: a debounced
+        // save is dropped (clearTimeout), and the epoch bump makes any save already
+        // awaiting the network discard its outcome — otherwise a stale POST could
+        // recreate the file we just deleted. A 404 is treated as success: the goal
+        // (the decision is gone) is already met, whether we removed it or it was
+        // removed elsewhere first. Only a real error keeps the dialog open.
+        async confirmDelete() {
+          if (this.deleting) return;
+          this.deleting = true;
+          this.deleteError = '';
+          clearTimeout(this.saveTimer);
+          this.saveTimer = null;
+          const title = this.title;
+          try {
+            const res = await apiFetch('decisions/' + encodeURIComponent(title), { method: 'DELETE' });
+            if (!res.ok && res.status !== 404) {
+              this.deleteError = (await res.text()) || ('HTTP ' + res.status);
+              return;
+            }
+            this.epoch++; // any auto-save still in flight drops its outcome
+            this.showDeleteDialog = false;
+            this.view = 'list'; this.title = ''; this.created = false;
+            this.saveState = 'saved'; this.saveError = '';
+            if (location.hash) location.hash = '';
+            this.reload();
+          } catch (e) {
+            this.deleteError = 'Could not delete: ' + e.message;
+          } finally {
+            this.deleting = false;
+          }
         },
         // open loads a stored decision into the unified page: the ranking panel on
         // top and the editable draft below it. Scores come back keyed by criterion

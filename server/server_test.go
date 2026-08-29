@@ -62,6 +62,18 @@ func put(h http.Handler, path, owner, body string) *httptest.ResponseRecorder {
 	return rec
 }
 
+// del issues a DELETE to path, setting the owner header when owner is non-empty,
+// and returns the response recorder.
+func del(h http.Handler, path, owner string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodDelete, path, nil)
+	if owner != "" {
+		req.Header.Set("X-Pondera-Owner", owner)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
 // TestHandlerScopesToInjectedOwner is the fatia-3 behavior: a mountable handler
 // serves decisions from a Store scoped to the owner the host injects (here via
 // the request header), and that scoping is a real isolation boundary — an owner
@@ -466,5 +478,44 @@ func TestUpdateEndpoint(t *testing.T) {
 	// Malformed JSON is a client error, not a 500 and not a silent no-op.
 	if r := put(h, "/decisions/buy-car", "alice", "{not json"); r.Code != http.StatusBadRequest {
 		t.Fatalf("PUT with malformed JSON: status %d, want 400", r.Code)
+	}
+}
+
+// TestDeleteEndpoint is the DELETE /decisions/{title} contract the SPA's delete
+// button consumes: an owner removes their own decision (204, and it is gone),
+// the delete is owner-scoped (bob cannot delete alice's, and the attempt neither
+// removes nor confirms it), deleting a missing title is a 404, and a request
+// with no injected owner is refused before touching storage.
+func TestDeleteEndpoint(t *testing.T) {
+	store := pondera.NewFileStore(t.TempDir())
+	h := server.New(store, server.OwnerFromHeader("X-Pondera-Owner"))
+	seed(t, store, "alice", "buy-car")
+	seed(t, store, "bob", "buy-car")
+
+	// No injected owner: refused before any deletion happens.
+	if r := del(h, "/decisions/buy-car", ""); r.Code != http.StatusUnauthorized {
+		t.Fatalf("DELETE with no owner: status %d, want 401", r.Code)
+	}
+
+	// Owner-scoping: bob deleting alice's decision is a 404, and alice's decision
+	// survives — the delete neither removes nor confirms another owner's data.
+	if r := del(h, "/decisions/buy-car", "bob"); r.Code != http.StatusNoContent {
+		t.Fatalf("bob deleting his own decision: status %d, want 204", r.Code)
+	}
+	if _, err := store.Load("alice", "buy-car"); err != nil {
+		t.Fatalf("alice's decision after bob deleted his: got %v, want it intact", err)
+	}
+
+	// Alice removes her own decision: 204, and it is actually gone.
+	if r := del(h, "/decisions/buy-car", "alice"); r.Code != http.StatusNoContent {
+		t.Fatalf("alice deleting her decision: status %d, want 204", r.Code)
+	}
+	if _, err := store.Load("alice", "buy-car"); err == nil {
+		t.Fatal("decision still loads after DELETE returned 204")
+	}
+
+	// Deleting a title the owner does not hold is a 404, not a silent 204.
+	if r := del(h, "/decisions/buy-car", "alice"); r.Code != http.StatusNotFound {
+		t.Fatalf("DELETE of already-gone decision: status %d, want 404", r.Code)
 	}
 }

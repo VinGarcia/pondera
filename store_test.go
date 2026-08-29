@@ -1,6 +1,7 @@
 package pondera
 
 import (
+	"errors"
 	"reflect"
 	"sort"
 	"testing"
@@ -103,5 +104,39 @@ func TestFileStoreSaveRequiresIdentity(t *testing.T) {
 	}
 	if err := s.Save(decisionFor("alice", "")); err == nil {
 		t.Error("Save with empty title: want error, got nil")
+	}
+}
+
+// TestFileStoreDelete removes a decision by its (owner, title) identity: after
+// Delete the decision is gone (Load reports ErrNotFound), deleting a decision
+// the owner does not hold is ErrNotFound rather than a silent success, and the
+// delete is owner-scoped — removing alice's decision never touches bob's under
+// the same title.
+func TestFileStoreDelete(t *testing.T) {
+	s := NewFileStore(t.TempDir())
+	for _, d := range []Decision{
+		decisionFor("alice", "lunch"),
+		decisionFor("bob", "lunch"),
+	} {
+		if err := s.Save(d); err != nil {
+			t.Fatalf("Save(%s/%s): %v", d.Owner, d.Title, err)
+		}
+	}
+
+	if err := s.Delete("alice", "lunch"); err != nil {
+		t.Fatalf("Delete(alice/lunch): %v", err)
+	}
+	if _, err := s.Load("alice", "lunch"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("Load after Delete: got %v, want ErrNotFound", err)
+	}
+
+	// Owner scoping: bob's decision under the same title is untouched.
+	if _, err := s.Load("bob", "lunch"); err != nil {
+		t.Errorf("bob's decision after deleting alice's: got %v, want it intact", err)
+	}
+
+	// Deleting what the owner does not hold is ErrNotFound, not a no-op success.
+	if err := s.Delete("alice", "lunch"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("Delete of already-gone decision: got %v, want ErrNotFound", err)
 	}
 }
