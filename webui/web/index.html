@@ -223,11 +223,13 @@
 
     <h1>Pondera <small>rank options by weighted values</small></h1>
 
-    <!-- Demo banner: decisions live in a shared public keyspace keyed to this
-         browser, so make the trade explicit and offer the way to keep them. -->
+    <!-- Demo banner: this is the open demo — decisions live in a shared public
+         keyspace addressable by anyone with the per-browser id, not a private
+         store, so the copy promises neither locality nor privacy. Signing in is
+         offered as the path to a real account (demo decisions do not migrate). -->
     <p v-if="mode === 'demo'" class="demobar">
-      You're trying Pondera in demo mode — your decisions are saved locally to this browser.
-      <button class="link" @click="signIn">Sign in</button> to keep them.
+      You're trying Pondera in demo mode — no login needed.
+      <button class="link" @click="signIn">Sign in</button> for a permanent account.
     </p>
 
     <!-- Decision view: ranking and configuration unified on one page. The ranking
