@@ -31,6 +31,7 @@ type Store interface {
 	Save(d Decision) error
 	Load(owner, title string) (Decision, error)
 	List(owner string) ([]string, error)
+	Delete(owner, title string) error
 }
 
 // FileStore is a Store backed by one TOML file per decision on disk, laid out
@@ -120,6 +121,26 @@ func (s *FileStore) Load(owner, title string) (Decision, error) {
 		return Decision{}, fmt.Errorf("%w: %s owns no %q", ErrNotFound, owner, title)
 	}
 	return d, err
+}
+
+// Delete removes the decision owned by owner with the given title. A title the
+// owner does not hold is ErrNotFound — the same answer Load gives, so a caller
+// (an HTTP layer) maps deleting a missing decision, or another owner's decision,
+// to the same 404 without distinguishing the two. Deleting the last decision
+// leaves an empty owner directory behind; List reads it as empty, so no cleanup
+// is needed for correctness.
+func (s *FileStore) Delete(owner, title string) error {
+	p, err := s.path(owner, title)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(p); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("%w: %s owns no %q", ErrNotFound, owner, title)
+		}
+		return fmt.Errorf("pondera: deleting %s: %w", title, err)
+	}
+	return nil
 }
 
 // List returns the titles of the decisions owned by owner, sorted by nothing in

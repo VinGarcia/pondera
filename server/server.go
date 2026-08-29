@@ -47,6 +47,7 @@ func New(store pondera.Store, ownerFn OwnerFunc) *Handler {
 	mux.HandleFunc("POST /decisions", h.create)
 	mux.HandleFunc("GET /decisions/{title}", h.get)
 	mux.HandleFunc("PUT /decisions/{title}", h.update)
+	mux.HandleFunc("DELETE /decisions/{title}", h.delete)
 	mux.HandleFunc("GET /decisions/{title}/rank", h.rank)
 	h.mux = mux
 	return h
@@ -219,6 +220,33 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, d)
+}
+
+// delete serves DELETE /decisions/{title}: it removes the decision the injected
+// owner holds under the path title. The delete is owner-scoped like every other
+// path — a title another owner holds reads as not-found, so a caller can neither
+// remove nor confirm the existence of a decision they do not own. A title the
+// owner does not hold is a 404 (delete does not create-then-fail differently
+// from get); a successful delete answers 204 No Content, carrying no body.
+func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
+	owner, ok := h.owner(w, r)
+	if !ok {
+		return
+	}
+	err := h.store.Delete(owner, r.PathValue("title"))
+	if errors.Is(err, pondera.ErrNotFound) {
+		http.Error(w, "decision not found", http.StatusNotFound)
+		return
+	}
+	if errors.Is(err, pondera.ErrInvalidTitle) {
+		http.Error(w, "decision title has no usable characters", http.StatusBadRequest)
+		return
+	}
+	if err != nil {
+		http.Error(w, "deleting decision", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // writeJSON encodes v as the JSON response body. An encoding failure is logged
