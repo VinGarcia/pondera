@@ -4,11 +4,19 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
+	"regexp"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/vingarcia/pondera"
+	"github.com/vingarcia/pondera/webui"
 )
+
+// canonicalUUID is the RFC-4122 36-char lowercase form the public backend
+// enforces and crypto.randomUUID() emits; the render test asserts the header the
+// SPA sent matches it exactly, so a non-canonical id would fail.
+var canonicalUUID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 // chromeDumpDOM renders url in headless Chrome and returns the post-JavaScript
 // DOM (what Vue actually mounted, not the served source). It SKIPS the test when
@@ -207,5 +215,67 @@ func TestBrowserRenderCheckIsLoadBearing(t *testing.T) {
 	}
 	if !strings.Contains(dom, "{{") {
 		t.Fatalf("broken page shows no unresolved mustaches — the check cannot tell rendered from unrendered:\n%s", dom)
+	}
+}
+
+// TestServeHandlerRendersDemoModeInBrowser proves demo mode boots end-to-end in a
+// real browser. Standalone `pond serve` does NOT enable demo, so the test serves
+// its own shell with window.PONDERA_DEMO="public" injected into the config
+// placeholder, mounts a fake /public/decisions backend that records the
+// X-Pondera-Public-Id header, and asserts the DOM shows the seeded decision (the
+// SPA fetched the public prefix), the demo banner text is present, and the header
+// carried a canonical UUID. This is the only proof the demo seam wires the
+// prefix, the header, and the banner together in a live page.
+func TestServeHandlerRendersDemoModeInBrowser(t *testing.T) {
+	// Shell with demo turned on: the same trick a public host uses — replace the
+	// config placeholder with the PONDERA_DEMO injection. serves the vendored Vue
+	// runtime unchanged so the SPA actually mounts.
+	shell := strings.Replace(string(webui.Index), "<!--PONDERA_CONFIG-->",
+		`<script>window.PONDERA_DEMO = "public";</script>`, 1)
+
+	var mu sync.Mutex
+	var gotPublicID string
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(shell))
+	})
+	mux.HandleFunc("GET /vue.global.prod.js", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		_, _ = w.Write(webui.Runtime)
+	})
+	// Fake public backend: the SPA in demo mode lists decisions from
+	// /public/decisions and must send the per-browser public id on it.
+	mux.HandleFunc("GET /public/decisions", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		gotPublicID = r.Header.Get("X-Pondera-Public-Id")
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`["demo-decision"]`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	dom := chromeDumpDOM(t, srv.URL+"/")
+
+	// The seeded title is in the DOM only if the SPA resolved demo mode, prefixed
+	// the API base, and fetched /public/decisions.
+	if !strings.Contains(dom, "demo-decision") {
+		t.Fatalf("demo DOM missing the seeded decision (SPA did not fetch the public prefix):\n%s", dom)
+	}
+	// The demo banner is rendered only in demo mode; its exact copy must survive.
+	if !strings.Contains(dom, "You're trying Pondera in demo mode") {
+		t.Fatalf("demo DOM missing the demo banner (banner did not render):\n%s", dom)
+	}
+	if strings.Contains(dom, "{{") {
+		t.Fatalf("demo DOM still has unresolved {{ }} mustaches (Vue did not mount):\n%s", dom)
+	}
+	// The recorded header proves the SPA generated and sent a canonical UUID — the
+	// public identity the server requires — not an empty or malformed value.
+	mu.Lock()
+	got := gotPublicID
+	mu.Unlock()
+	if !canonicalUUID.MatchString(got) {
+		t.Fatalf("public backend received X-Pondera-Public-Id %q, want a canonical RFC-4122 UUID", got)
 	}
 }

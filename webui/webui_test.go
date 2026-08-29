@@ -61,4 +61,20 @@ func TestExportedAssetsAreEmbedded(t *testing.T) {
 	if !strings.Contains(string(webui.Index), "PONDERA_AUTH_URL") {
 		t.Fatal("SPA shell is missing the auth bootstrap")
 	}
+	// PONDERA_DEMO is the seam a public host injects to turn on demo mode; losing
+	// it collapses the SPA back to auth-or-standalone and no unauthenticated
+	// visitor could ever reach the public keyspace.
+	if !strings.Contains(string(webui.Index), "PONDERA_DEMO") {
+		t.Fatal("SPA shell is missing the demo bootstrap")
+	}
+	// Every public request must carry this header; without it in the shell, demo
+	// requests would be anonymous and the server would reject them.
+	if !strings.Contains(string(webui.Index), "X-Pondera-Public-Id") {
+		t.Fatal("SPA shell is missing the public-id request header")
+	}
+	// The per-browser public id must be the canonical UUID the server enforces;
+	// randomUUID is the only source that produces it, so its call must survive.
+	if !strings.Contains(string(webui.Index), "randomUUID") {
+		t.Fatal("SPA shell is missing the randomUUID public-id generator")
+	}
 }
