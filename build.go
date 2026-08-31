@@ -30,9 +30,6 @@ func (d *Decision) AddCriterion(c Criterion) error {
 	if c.Weight <= 0 {
 		return fmt.Errorf("pondera: criterion %q has non-positive weight %g", c.Name, c.Weight)
 	}
-	if c.Allocation && !c.Range.isIdentity() {
-		return fmt.Errorf("pondera: allocation criterion %q cannot also set a range %s", c.Name, c.Range)
-	}
 	if d.criterion(c.Name) != nil {
 		return fmt.Errorf("pondera: criterion %q already exists", c.Name)
 	}

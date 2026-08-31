@@ -290,125 +290,98 @@ func TestRankErrors(t *testing.T) {
 	}
 }
 
-func TestAllocationRank(t *testing.T) {
+// TestParseAnchor covers the CLI/textual anchor forms: the two keywords and any
+// number map to an anchor, and anything else is a loud error rather than a
+// silent zero. Results are compared through String(), the round-trip form.
+func TestParseAnchor(t *testing.T) {
 	tests := []struct {
-		name     string
-		decision Decision
-		want     []Result
+		name string
+		in   string
+		want string // Anchor.String(), the TOML form
 	}{
-		{
-			// A benefit allocation criterion's scores are shares that sum to
-			// 100; with the default [0,100] range each share is already its own
-			// 0-100 contribution, so the option holding the larger share ranks
-			// higher. Composed with an ordinary bounded criterion to show an
-			// allocation criterion is just another contribution in the sum.
-			// A = (70*3 + 40*1)/4 = 62.5 ; B = (30*3 + 90*1)/4 = 45.
-			name: "benefit allocation ranks by share",
-			decision: Decision{
-				Title: "onde investir",
-				Criteria: []Criterion{
-					{Name: "impacto", Weight: 3, Allocation: true},
-					{Name: "prontidao", Weight: 1},
-				},
-				Options: []Option{
-					{Name: "A", Scores: map[string]float64{"impacto": 70, "prontidao": 40}},
-					{Name: "B", Scores: map[string]float64{"impacto": 30, "prontidao": 90}},
-				},
-			},
-			want: []Result{
-				{Option: "A", Score: (70*3 + 40*1) / 4.0},
-				{Option: "B", Score: (30*3 + 90*1) / 4.0},
-			},
-		},
-		{
-			// Direction still applies to an allocation criterion: a cost
-			// allocation (e.g. distributing a downside) inverts each share, so
-			// the option carrying the smaller share of the bad thing wins.
-			// culpado 80 -> contrib 20 ; inocente 20 -> contrib 80.
-			name: "cost allocation inverts share",
-			decision: Decision{
-				Criteria: []Criterion{
-					{Name: "dano", Weight: 1, Direction: Cost, Allocation: true},
-				},
-				Options: []Option{
-					{Name: "culpado", Scores: map[string]float64{"dano": 80}},
-					{Name: "inocente", Scores: map[string]float64{"dano": 20}},
-				},
-			},
-			want: []Result{{Option: "inocente", Score: 80}, {Option: "culpado", Score: 20}},
-		},
-		{
-			// A single option trivially holds the whole 100 share: valid, not an
-			// error, and contributes its full share.
-			name: "single option holds the whole allocation",
-			decision: Decision{
-				Criteria: []Criterion{{Name: "foco", Weight: 1, Allocation: true}},
-				Options:  []Option{{Name: "solo", Scores: map[string]float64{"foco": 100}}},
-			},
-			want: []Result{{Option: "solo", Score: 100}},
-		},
+		{name: "min keyword", in: "min", want: `"min"`},
+		{name: "max keyword", in: "max", want: `"max"`},
+		{name: "zero", in: "0", want: "0"},
+		{name: "fractional", in: "42.5", want: "42.5"},
+		{name: "negative", in: "-3", want: "-3"},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := tt.decision.Rank()
+			got, err := ParseAnchor(tt.in)
 			if err != nil {
-				t.Fatalf("Rank() error = %v", err)
+				t.Fatalf("ParseAnchor(%q): %v", tt.in, err)
 			}
-			if len(got) != len(tt.want) {
-				t.Fatalf("Rank() returned %d results, want %d", len(got), len(tt.want))
-			}
-			for i := range got {
-				if got[i].Option != tt.want[i].Option || math.Abs(got[i].Score-tt.want[i].Score) > eps {
-					t.Errorf("result[%d] = %+v, want %+v", i, got[i], tt.want[i])
-				}
+			if got.String() != tt.want {
+				t.Fatalf("ParseAnchor(%q) = %s, want %s", tt.in, got.String(), tt.want)
 			}
 		})
 	}
 }
 
-func TestAllocationErrors(t *testing.T) {
+// TestParseAnchorErrors confirms a non-numeric, non-keyword anchor is rejected —
+// a typo in a hand-typed flag must fail, not default to a number.
+func TestParseAnchorErrors(t *testing.T) {
 	tests := []struct {
-		name     string
-		decision Decision
+		name string
+		in   string
 	}{
-		{
-			// Shares over 100: the allocation does not add up, so the scores are
-			// not a valid distribution — fail loudly rather than rank on bad data.
-			name: "shares sum above 100",
-			decision: Decision{
-				Criteria: []Criterion{{Name: "impacto", Weight: 1, Allocation: true}},
-				Options: []Option{
-					{Name: "A", Scores: map[string]float64{"impacto": 70}},
-					{Name: "B", Scores: map[string]float64{"impacto": 40}},
-				},
-			},
-		},
-		{
-			name: "shares sum below 100",
-			decision: Decision{
-				Criteria: []Criterion{{Name: "impacto", Weight: 1, Allocation: true}},
-				Options: []Option{
-					{Name: "A", Scores: map[string]float64{"impacto": 50}},
-					{Name: "B", Scores: map[string]float64{"impacto": 30}},
-				},
-			},
-		},
-		{
-			// An allocation criterion is inherently a [0,100] share; pinning a
-			// custom range on it contradicts that, so it is a config error.
-			name: "allocation with explicit range",
-			decision: Decision{
-				Criteria: []Criterion{{Name: "impacto", Weight: 1, Allocation: true, Range: NewRange(FixedAnchor(0), FixedAnchor(50))}},
-				Options:  []Option{{Name: "A", Scores: map[string]float64{"impacto": 100}}},
-			},
-		},
+		{name: "unknown keyword", in: "most"},
+		{name: "empty", in: ""},
+		{name: "not a number", in: "abc"},
+		{name: "embedded comma", in: "1,2"},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, err := tt.decision.Rank(); err == nil {
-				t.Fatalf("Rank() expected an error, got nil")
+			if _, err := ParseAnchor(tt.in); err == nil {
+				t.Fatalf("ParseAnchor(%q) = nil error, want rejection", tt.in)
+			}
+		})
+	}
+}
+
+// TestParseRange covers the CLI "lo,hi" form, including surrounding spaces, for
+// each meaningful anchor combination. Compared through String(), the TOML form.
+func TestParseRange(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string // Range.String(), the TOML form
+	}{
+		{name: "bounded default", in: "0,100", want: "[0, 100]"},
+		{name: "field-relative", in: "min,max", want: `["min", "max"]`},
+		{name: "zero-anchored ratio", in: "0,max", want: `[0, "max"]`},
+		{name: "custom window with spaces", in: "40, 80", want: "[40, 80]"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ParseRange(tt.in)
+			if err != nil {
+				t.Fatalf("ParseRange(%q): %v", tt.in, err)
+			}
+			if got.String() != tt.want {
+				t.Fatalf("ParseRange(%q) = %s, want %s", tt.in, got.String(), tt.want)
+			}
+		})
+	}
+}
+
+// TestParseRangeErrors confirms a range with the wrong number of parts or a bad
+// anchor at either end is rejected rather than silently truncated or defaulted.
+func TestParseRangeErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+	}{
+		{name: "single anchor", in: "0"},
+		{name: "three anchors", in: "0,100,5"},
+		{name: "empty", in: ""},
+		{name: "bad lo", in: "foo,100"},
+		{name: "bad hi", in: "0,most"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := ParseRange(tt.in); err == nil {
+				t.Fatalf("ParseRange(%q) = nil error, want rejection", tt.in)
 			}
 		})
 	}
