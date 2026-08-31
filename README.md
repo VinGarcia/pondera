@@ -18,6 +18,12 @@ anti-rationalization rule is mechanical, not a matter of willpower. This is
 especially recommended when an AI fills in the scores, so the model can't
 quietly adjust the weights to reach the result it wants.
 
+> **Note — read this as a proof of concept, not a production sample.**
+> The heart of this project is the decision engine, which I designed and
+> tested deliberately. The surrounding scaffolding (CLI, API, and UI) was
+> largely AI-generated to get a working demo up quickly and hasn't gone
+> through a full human review yet. Judge the idea, not the plumbing.
+
 ## Setup & Usage
 
 The CLI binary is `pond` (short for pondera):
