@@ -77,7 +77,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	titles, err := h.store.List(owner)
+	titles, err := h.store.List(r.Context(), owner)
 	if err != nil {
 		http.Error(w, "listing decisions", http.StatusInternalServerError)
 		return
@@ -94,7 +94,7 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	d, err := h.store.Load(owner, r.PathValue("title"))
+	d, err := h.store.Load(r.Context(), owner, r.PathValue("title"))
 	if errors.Is(err, pondera.ErrNotFound) {
 		http.Error(w, "decision not found", http.StatusNotFound)
 		return
@@ -117,7 +117,7 @@ func (h *Handler) rank(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	d, err := h.store.Load(owner, r.PathValue("title"))
+	d, err := h.store.Load(r.Context(), owner, r.PathValue("title"))
 	if errors.Is(err, pondera.ErrNotFound) {
 		http.Error(w, "decision not found", http.StatusNotFound)
 		return
@@ -161,7 +161,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	// update is a different, explicit operation. The lookup is owner-scoped, so a
 	// title another owner holds does not collide. (There is a check-then-save
 	// TOCTOU window; acceptable for the single-host FileStore, logged as a debt.)
-	if _, err := h.store.Load(d.Owner, d.Title); err == nil {
+	if _, err := h.store.Load(r.Context(), d.Owner, d.Title); err == nil {
 		http.Error(w, "decision already exists", http.StatusConflict)
 		return
 	} else if errors.Is(err, pondera.ErrInvalidTitle) {
@@ -171,7 +171,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "checking for existing decision", http.StatusInternalServerError)
 		return
 	}
-	if err := h.store.Save(d); err != nil {
+	if err := h.store.Save(r.Context(), d); err != nil {
 		http.Error(w, "saving decision", http.StatusInternalServerError)
 		return
 	}
@@ -195,7 +195,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 	// The decision must already exist for this owner; PUT edits, it does not
 	// create. The lookup is owner-scoped, so a title another owner holds reads as
 	// not-found here — bob cannot edit alice's decision, nor learn it exists.
-	if _, err := h.store.Load(owner, title); errors.Is(err, pondera.ErrNotFound) {
+	if _, err := h.store.Load(r.Context(), owner, title); errors.Is(err, pondera.ErrNotFound) {
 		http.Error(w, "decision not found", http.StatusNotFound)
 		return
 	} else if errors.Is(err, pondera.ErrInvalidTitle) {
@@ -215,7 +215,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 	// owner or a different title cannot escape that scope.
 	d.Owner = owner
 	d.Title = title
-	if err := h.store.Save(d); err != nil {
+	if err := h.store.Save(r.Context(), d); err != nil {
 		http.Error(w, "saving decision", http.StatusInternalServerError)
 		return
 	}
@@ -233,7 +233,7 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	err := h.store.Delete(owner, r.PathValue("title"))
+	err := h.store.Delete(r.Context(), owner, r.PathValue("title"))
 	if errors.Is(err, pondera.ErrNotFound) {
 		http.Error(w, "decision not found", http.StatusNotFound)
 		return

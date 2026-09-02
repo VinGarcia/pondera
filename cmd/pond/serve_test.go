@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -176,7 +177,7 @@ func TestServeHandlerEditDecisionThroughSPA(t *testing.T) {
 			{Name: "budget", Scores: map[string]float64{"quality": 0, "price": 100}},
 		},
 	}
-	if err := store.Save(seed); err != nil {
+	if err := store.Save(context.Background(), seed); err != nil {
 		t.Fatalf("seeding: %v", err)
 	}
 	h := serveHandler(store, "local")
@@ -369,7 +370,7 @@ func seedRankable(t *testing.T, store pondera.Store, owner, title string) {
 			{Name: "risky-dear", Scores: map[string]float64{"safety": 70, "price": 40000}},
 		},
 	}
-	if err := store.Save(d); err != nil {
+	if err := store.Save(context.Background(), d); err != nil {
 		t.Fatalf("seeding %s/%s: %v", owner, title, err)
 	}
 }
