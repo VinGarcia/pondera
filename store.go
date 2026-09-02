@@ -1,6 +1,7 @@
 package pondera
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -27,11 +28,17 @@ var ErrInvalidTitle = errors.New("pondera: title has no filename-safe characters
 // never leaking another owner's decisions. The interface keeps the persistence
 // medium open — a filesystem today, a database behind a server tomorrow —
 // without the callers changing.
+//
+// Every method takes a context.Context: the FileStore only honors cancellation,
+// but the port is deliberately backend-agnostic, and a database- or
+// network-backed Store needs the context to carry deadlines and cancellation
+// per request. Threading it here means an HTTP handler can pass r.Context()
+// straight through without an adapter re-declaring the port to add it.
 type Store interface {
-	Save(d Decision) error
-	Load(owner, title string) (Decision, error)
-	List(owner string) ([]string, error)
-	Delete(owner, title string) error
+	Save(ctx context.Context, d Decision) error
+	Load(ctx context.Context, owner, title string) (Decision, error)
+	List(ctx context.Context, owner string) ([]string, error)
+	Delete(ctx context.Context, owner, title string) error
 }
 
 // FileStore is a Store backed by one TOML file per decision on disk, laid out
@@ -97,8 +104,12 @@ func (s *FileStore) path(owner, title string) (string, error) {
 }
 
 // Save writes the decision under its owner's directory, creating the directory
-// if needed. It refuses a decision without a usable owner and title.
-func (s *FileStore) Save(d Decision) error {
+// if needed. It refuses a decision without a usable owner and title, and a
+// cancelled context before touching the disk.
+func (s *FileStore) Save(ctx context.Context, d Decision) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	p, err := s.path(d.Owner, d.Title)
 	if err != nil {
 		return err
@@ -111,7 +122,10 @@ func (s *FileStore) Save(d Decision) error {
 
 // Load reads back the decision owned by owner with the given title, returning
 // ErrNotFound when no such file exists so callers need not match on fs errors.
-func (s *FileStore) Load(owner, title string) (Decision, error) {
+func (s *FileStore) Load(ctx context.Context, owner, title string) (Decision, error) {
+	if err := ctx.Err(); err != nil {
+		return Decision{}, err
+	}
 	p, err := s.path(owner, title)
 	if err != nil {
 		return Decision{}, err
@@ -129,7 +143,10 @@ func (s *FileStore) Load(owner, title string) (Decision, error) {
 // to the same 404 without distinguishing the two. Deleting the last decision
 // leaves an empty owner directory behind; List reads it as empty, so no cleanup
 // is needed for correctness.
-func (s *FileStore) Delete(owner, title string) error {
+func (s *FileStore) Delete(ctx context.Context, owner, title string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	p, err := s.path(owner, title)
 	if err != nil {
 		return err
@@ -147,7 +164,10 @@ func (s *FileStore) Delete(owner, title string) error {
 // particular (callers sort as they need). An unknown owner lists as empty with
 // no error. Each title is read from the file itself, so it reflects the real
 // stored Title, not a lossy slug of the filename.
-func (s *FileStore) List(owner string) ([]string, error) {
+func (s *FileStore) List(ctx context.Context, owner string) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if owner == "" {
 		return nil, fmt.Errorf("pondera: cannot list decisions of an empty owner")
 	}
