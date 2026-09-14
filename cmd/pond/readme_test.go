@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -126,18 +127,57 @@ func trimBlank(lines []string) []string {
 	return lines
 }
 
-// shellSplit is a minimal quote-aware splitter: it honors double quotes so a
-// flag like --title "New car" stays a single argument.
+// TestShellSplit pins the minimal splitter's contract: whitespace separates
+// tokens, both quote styles group a span into one token with the quotes stripped,
+// and the styles are literal inside each other.
+func TestShellSplit(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want []string
+	}{
+		{name: "unquoted spaces", in: "add-criterion --name safety --weight 3", want: []string{"add-criterion", "--name", "safety", "--weight", "3"}},
+		{name: "double quoted", in: `new --title "New car" car.toml`, want: []string{"new", "--title", "New car", "car.toml"}},
+		{name: "single quoted", in: `new --title 'New car' car.toml`, want: []string{"new", "--title", "New car", "car.toml"}},
+		{name: "mixed styles", in: `--a "x y" --b 'p q'`, want: []string{"--a", "x y", "--b", "p q"}},
+		{name: "single inside double literal", in: `--title "it's fine"`, want: []string{"--title", "it's fine"}},
+		{name: "double inside single literal", in: `--title 'say "hi"'`, want: []string{"--title", `say "hi"`}},
+		{name: "empty", in: "", want: nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := shellSplit(tt.in)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("shellSplit(%q) = %#v, want %#v", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+// shellSplit is a minimal quote-aware splitter: it honors both double and single
+// quotes so a flag like --title "New car" or --title 'New car' stays a single
+// argument. A quoted span is one token with the quotes stripped; the two styles do
+// not nest — while inside one, the other is a literal character. It is deliberately
+// not a full shell parser (no escapes, no variable expansion): just enough to read
+// the README's example commands.
 func shellSplit(s string) []string {
 	var args []string
 	var cur strings.Builder
-	inQuote, hasTok := false, false
+	var quote rune // the open quote char, or 0 when not inside a quoted span
+	hasTok := false
 	for _, r := range s {
 		switch {
-		case r == '"':
-			inQuote = !inQuote
+		case quote != 0:
+			if r == quote {
+				quote = 0
+			} else {
+				cur.WriteRune(r)
+			}
 			hasTok = true
-		case r == ' ' && !inQuote:
+		case r == '"' || r == '\'':
+			quote = r
+			hasTok = true
+		case r == ' ':
 			if hasTok {
 				args = append(args, cur.String())
 				cur.Reset()

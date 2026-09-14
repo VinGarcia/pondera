@@ -52,6 +52,31 @@ func TestFullFlow(t *testing.T) {
 	}
 }
 
+// TestSetWeightUpdatesWeight proves the happy path: pre-lock, set-weight actually
+// changes a criterion's weight and the change is observable in show output. The
+// error paths (post-lock, missing --weight) are covered elsewhere; this pins the
+// success case so a regression that silently no-ops set-weight would be caught.
+func TestSetWeightUpdatesWeight(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "w.toml")
+	var sink bytes.Buffer
+	mustRun(t, &sink, "new", "--title", "T", file)
+	mustRun(t, &sink, "add-criterion", "--name", "safety", "--weight", "1", file)
+
+	var before bytes.Buffer
+	mustRun(t, &before, "show", file)
+	if !strings.Contains(before.String(), "safety (weight 1,") {
+		t.Fatalf("expected initial weight 1 in show output, got:\n%s", before.String())
+	}
+
+	mustRun(t, &sink, "set-weight", "--name", "safety", "--weight", "4", file)
+
+	var after bytes.Buffer
+	mustRun(t, &after, "show", file)
+	if !strings.Contains(after.String(), "safety (weight 4,") {
+		t.Errorf("expected updated weight 4 in show output, got:\n%s", after.String())
+	}
+}
+
 // TestDisciplineEnforced proves the CLI inherits the builder's ordering rule:
 // an option cannot be added before the weights are locked, and a weight cannot
 // move after. This is the anti-rationalization guarantee, checked end-to-end.
