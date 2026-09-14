@@ -270,6 +270,20 @@ func TestRankErrors(t *testing.T) {
 			},
 		},
 		{
+			// A hand-edited file or API payload can carry two criteria with the
+			// same name; the builder guards it but Rank is reached directly. The
+			// name keys the bounds/score maps, so without this guard the duplicate
+			// silently double-counts its weight and skews the ranking.
+			name: "duplicate criterion name",
+			decision: Decision{
+				Criteria: []Criterion{
+					{Name: "x", Weight: 1},
+					{Name: "x", Weight: 1},
+				},
+				Options: []Option{{Name: "A", Scores: map[string]float64{"x": 10}}},
+			},
+		},
+		{
 			name: "missing score on normalized criterion",
 			decision: Decision{
 				Criteria: []Criterion{{Name: "x", Weight: 1, Range: NewRange(MinAnchor(), MaxAnchor())}},

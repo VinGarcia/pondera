@@ -272,10 +272,19 @@ func (d Decision) Rank() ([]Result, error) {
 	}
 
 	var totalWeight float64
+	seen := make(map[string]bool, len(d.Criteria))
 	for _, c := range d.Criteria {
 		if c.Weight <= 0 {
 			return nil, fmt.Errorf("pondera: criterion %q has non-positive weight %g", c.Name, c.Weight)
 		}
+		// Names key the per-criterion score and bounds maps, so a duplicate would
+		// silently double-count its weight while the maps hold one entry. The
+		// builder guards this, but a hand-edited file or an API payload reaches
+		// Rank directly, so it must fail loudly here too.
+		if seen[c.Name] {
+			return nil, fmt.Errorf("pondera: duplicate criterion %q", c.Name)
+		}
+		seen[c.Name] = true
 		totalWeight += c.Weight
 	}
 
