@@ -1,6 +1,7 @@
 package pondera
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"sort"
@@ -38,7 +39,7 @@ func TestFileStoreListIsolatesByOwner(t *testing.T) {
 		decisionFor("bob", "hire"),
 		decisionFor("alice", "stack"),
 	} {
-		if err := s.Save(d); err != nil {
+		if err := s.Save(context.Background(), d); err != nil {
 			t.Fatalf("Save(%s/%s): %v", d.Owner, d.Title, err)
 		}
 	}
@@ -52,7 +53,7 @@ func TestFileStoreListIsolatesByOwner(t *testing.T) {
 		{"nobody", []string{}}, // unknown owner: empty, not an error
 	}
 	for _, c := range cases {
-		got, err := s.List(c.owner)
+		got, err := s.List(context.Background(), c.owner)
 		if err != nil {
 			t.Fatalf("List(%s): %v", c.owner, err)
 		}
@@ -69,11 +70,11 @@ func TestFileStoreListIsolatesByOwner(t *testing.T) {
 func TestFileStoreRoundTrip(t *testing.T) {
 	s := NewFileStore(t.TempDir())
 	want := decisionFor("alice", "lunch")
-	if err := s.Save(want); err != nil {
+	if err := s.Save(context.Background(), want); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 
-	got, err := s.Load("alice", "lunch")
+	got, err := s.Load(context.Background(), "alice", "lunch")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -85,11 +86,46 @@ func TestFileStoreRoundTrip(t *testing.T) {
 	}
 }
 
+// TestFileStoreHonorsCancelledContext proves the context threaded through the
+// port is actually consulted: a cancelled context short-circuits every method
+// before it touches the disk. The FileStore gains nothing from cancellation
+// itself, but the guard is what lets a database-backed Store honor deadlines
+// behind the same interface, so it must not be a decorative parameter.
+func TestFileStoreHonorsCancelledContext(t *testing.T) {
+	s := NewFileStore(t.TempDir())
+	// Seed a decision with a live context so there is something for the reads to
+	// find — proving the cancellation, not a missing file, is what fails them.
+	if err := s.Save(context.Background(), decisionFor("alice", "lunch")); err != nil {
+		t.Fatalf("seed Save: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if err := s.Save(ctx, decisionFor("alice", "dinner")); !errors.Is(err, context.Canceled) {
+		t.Errorf("Save with cancelled context: got %v, want context.Canceled", err)
+	}
+	if _, err := s.Load(ctx, "alice", "lunch"); !errors.Is(err, context.Canceled) {
+		t.Errorf("Load with cancelled context: got %v, want context.Canceled", err)
+	}
+	if _, err := s.List(ctx, "alice"); !errors.Is(err, context.Canceled) {
+		t.Errorf("List with cancelled context: got %v, want context.Canceled", err)
+	}
+	if err := s.Delete(ctx, "alice", "lunch"); !errors.Is(err, context.Canceled) {
+		t.Errorf("Delete with cancelled context: got %v, want context.Canceled", err)
+	}
+
+	// The cancellation guarded the disk: the seeded decision is untouched.
+	if _, err := s.Load(context.Background(), "alice", "lunch"); err != nil {
+		t.Errorf("decision after cancelled Delete: got %v, want it intact", err)
+	}
+}
+
 // TestFileStoreLoadUnknown reports a missing decision as an error, not a zero
 // value that a caller would mistake for an empty-but-real decision.
 func TestFileStoreLoadUnknown(t *testing.T) {
 	s := NewFileStore(t.TempDir())
-	if _, err := s.Load("alice", "ghost"); err == nil {
+	if _, err := s.Load(context.Background(), "alice", "ghost"); err == nil {
 		t.Fatal("Load of a missing decision: want error, got nil")
 	}
 }
@@ -99,10 +135,10 @@ func TestFileStoreLoadUnknown(t *testing.T) {
 // loudly instead of writing an unreachable file.
 func TestFileStoreSaveRequiresIdentity(t *testing.T) {
 	s := NewFileStore(t.TempDir())
-	if err := s.Save(decisionFor("", "lunch")); err == nil {
+	if err := s.Save(context.Background(), decisionFor("", "lunch")); err == nil {
 		t.Error("Save with empty owner: want error, got nil")
 	}
-	if err := s.Save(decisionFor("alice", "")); err == nil {
+	if err := s.Save(context.Background(), decisionFor("alice", "")); err == nil {
 		t.Error("Save with empty title: want error, got nil")
 	}
 }
@@ -118,25 +154,25 @@ func TestFileStoreDelete(t *testing.T) {
 		decisionFor("alice", "lunch"),
 		decisionFor("bob", "lunch"),
 	} {
-		if err := s.Save(d); err != nil {
+		if err := s.Save(context.Background(), d); err != nil {
 			t.Fatalf("Save(%s/%s): %v", d.Owner, d.Title, err)
 		}
 	}
 
-	if err := s.Delete("alice", "lunch"); err != nil {
+	if err := s.Delete(context.Background(), "alice", "lunch"); err != nil {
 		t.Fatalf("Delete(alice/lunch): %v", err)
 	}
-	if _, err := s.Load("alice", "lunch"); !errors.Is(err, ErrNotFound) {
+	if _, err := s.Load(context.Background(), "alice", "lunch"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("Load after Delete: got %v, want ErrNotFound", err)
 	}
 
 	// Owner scoping: bob's decision under the same title is untouched.
-	if _, err := s.Load("bob", "lunch"); err != nil {
+	if _, err := s.Load(context.Background(), "bob", "lunch"); err != nil {
 		t.Errorf("bob's decision after deleting alice's: got %v, want it intact", err)
 	}
 
 	// Deleting what the owner does not hold is ErrNotFound, not a no-op success.
-	if err := s.Delete("alice", "lunch"); !errors.Is(err, ErrNotFound) {
+	if err := s.Delete(context.Background(), "alice", "lunch"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("Delete of already-gone decision: got %v, want ErrNotFound", err)
 	}
 }

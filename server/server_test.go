@@ -1,6 +1,7 @@
 package server_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -21,7 +22,7 @@ func seed(t *testing.T, store pondera.Store, owner, title string) {
 		Criteria: []pondera.Criterion{{Name: "safety", Weight: 1}},
 		Options:  []pondera.Option{{Name: "a", Scores: map[string]float64{"safety": 80}}},
 	}
-	if err := store.Save(d); err != nil {
+	if err := store.Save(context.Background(), d); err != nil {
 		t.Fatalf("seeding %s/%s: %v", owner, title, err)
 	}
 }
@@ -166,7 +167,7 @@ func TestRankEndpoint(t *testing.T) {
 			{Name: "safe", Scores: map[string]float64{"safety": 90, "price": 80}},
 		},
 	}
-	if err := store.Save(rankable); err != nil {
+	if err := store.Save(context.Background(), rankable); err != nil {
 		t.Fatalf("seeding rankable decision: %v", err)
 	}
 
@@ -211,7 +212,7 @@ func TestRankEndpoint(t *testing.T) {
 		Criteria: []pondera.Criterion{{Name: "safety", Weight: 1}, {Name: "price", Weight: 1}},
 		Options:  []pondera.Option{{Name: "a", Scores: map[string]float64{"safety": 80}}},
 	}
-	if err := store.Save(unrankable); err != nil {
+	if err := store.Save(context.Background(), unrankable); err != nil {
 		t.Fatalf("seeding unrankable decision: %v", err)
 	}
 	r := get(h, "/decisions/half-built/rank", "alice")
@@ -263,7 +264,7 @@ func TestCreateScopesToInjectedOwner(t *testing.T) {
 	}
 
 	// The persisted decision belongs to alice, with the body's owner overridden.
-	got, err := store.Load("alice", "raise-ask")
+	got, err := store.Load(context.Background(), "alice", "raise-ask")
 	if err != nil {
 		t.Fatalf("alice's decision was not saved under her: %v", err)
 	}
@@ -271,7 +272,7 @@ func TestCreateScopesToInjectedOwner(t *testing.T) {
 		t.Fatalf("saved owner = %q, want alice (body owner must be ignored)", got.Owner)
 	}
 	// bob must not have received the decision the body tried to attribute to him.
-	if _, err := store.Load("bob", "raise-ask"); err == nil {
+	if _, err := store.Load(context.Background(), "bob", "raise-ask"); err == nil {
 		t.Fatal("decision leaked to bob: body owner was trusted over the injected owner")
 	}
 	// And bob cannot read it over HTTP either.
@@ -317,7 +318,7 @@ func TestCreateRejectsDuplicateTitle(t *testing.T) {
 	// The rejected write must not have clobbered the original — the score is
 	// still 80, proving the 409 protected existing data rather than merely
 	// returning a different status after overwriting.
-	got, err := store.Load("alice", "buy-car")
+	got, err := store.Load(context.Background(), "alice", "buy-car")
 	if err != nil {
 		t.Fatalf("loading after rejected duplicate: %v", err)
 	}
@@ -394,7 +395,7 @@ func TestUpdateEndpoint(t *testing.T) {
 			{Name: "safe", Scores: map[string]float64{"safety": 90, "price": 80}},
 		},
 	}
-	if err := store.Save(initial); err != nil {
+	if err := store.Save(context.Background(), initial); err != nil {
 		t.Fatalf("seeding initial decision: %v", err)
 	}
 	if r := get(h, "/decisions/buy-car/rank", "alice"); r.Code == http.StatusOK {
@@ -424,12 +425,12 @@ func TestUpdateEndpoint(t *testing.T) {
 	// now reflects the new weights: the cheaper option wins. This is the whole
 	// value — the engine re-ranks from the updated source of truth, not a stale
 	// copy.
-	if got, err := store.Load("alice", "buy-car"); err != nil {
+	if got, err := store.Load(context.Background(), "alice", "buy-car"); err != nil {
 		t.Fatalf("loading edited decision: %v", err)
 	} else if got.Owner != "alice" {
 		t.Fatalf("stored owner = %q, want alice (body owner must be ignored)", got.Owner)
 	}
-	if _, err := store.Load("bob", "buy-car"); err == nil {
+	if _, err := store.Load(context.Background(), "bob", "buy-car"); err == nil {
 		t.Fatal("edit leaked to bob: body owner was trusted over the injected owner")
 	}
 	rec := get(h, "/decisions/buy-car/rank", "alice")
@@ -450,7 +451,7 @@ func TestUpdateEndpoint(t *testing.T) {
 	if r := put(h, "/decisions/no-such", "alice", mustJSON(missing)); r.Code != http.StatusNotFound {
 		t.Fatalf("PUT to missing decision: status %d, want 404 (update must not create)", r.Code)
 	}
-	if _, err := store.Load("alice", "no-such"); err == nil {
+	if _, err := store.Load(context.Background(), "alice", "no-such"); err == nil {
 		t.Fatal("PUT to a missing title created it: update must be explicit, not upsert")
 	}
 
@@ -464,7 +465,7 @@ func TestUpdateEndpoint(t *testing.T) {
 	if r := put(h, "/decisions/buy-car", "bob", mustJSON(bobEdit)); r.Code != http.StatusNotFound {
 		t.Fatalf("bob editing alice's decision: status %d, want 404", r.Code)
 	}
-	if got, err := store.Load("alice", "buy-car"); err != nil {
+	if got, err := store.Load(context.Background(), "alice", "buy-car"); err != nil {
 		t.Fatalf("reloading alice's decision after bob's attempt: %v", err)
 	} else if got.Options[1].Scores["safety"] != 90 {
 		t.Fatalf("alice's decision was clobbered by bob's edit: safe safety = %v, want 90", got.Options[1].Scores["safety"])
@@ -502,7 +503,7 @@ func TestDeleteEndpoint(t *testing.T) {
 	if r := del(h, "/decisions/buy-car", "bob"); r.Code != http.StatusNoContent {
 		t.Fatalf("bob deleting his own decision: status %d, want 204", r.Code)
 	}
-	if _, err := store.Load("alice", "buy-car"); err != nil {
+	if _, err := store.Load(context.Background(), "alice", "buy-car"); err != nil {
 		t.Fatalf("alice's decision after bob deleted his: got %v, want it intact", err)
 	}
 
@@ -510,7 +511,7 @@ func TestDeleteEndpoint(t *testing.T) {
 	if r := del(h, "/decisions/buy-car", "alice"); r.Code != http.StatusNoContent {
 		t.Fatalf("alice deleting her decision: status %d, want 204", r.Code)
 	}
-	if _, err := store.Load("alice", "buy-car"); err == nil {
+	if _, err := store.Load(context.Background(), "alice", "buy-car"); err == nil {
 		t.Fatal("decision still loads after DELETE returned 204")
 	}
 
