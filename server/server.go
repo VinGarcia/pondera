@@ -88,7 +88,9 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 // get serves GET /decisions/{title}: one decision owned by the injected owner.
 // A title the owner does not own is a 404 — the same answer whether the
 // decision is missing or belongs to someone else, so the endpoint never
-// confirms another owner's decision exists.
+// confirms another owner's decision exists. A title with no filename-safe
+// characters is the caller's mistake, so it is a 400, not a 500 leaking an
+// internal slug error — the same mapping create/update/delete use.
 func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 	owner, ok := h.owner(w, r)
 	if !ok {
@@ -97,6 +99,10 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 	d, err := h.store.Load(r.Context(), owner, r.PathValue("title"))
 	if errors.Is(err, pondera.ErrNotFound) {
 		http.Error(w, "decision not found", http.StatusNotFound)
+		return
+	}
+	if errors.Is(err, pondera.ErrInvalidTitle) {
+		http.Error(w, "decision title has no usable characters", http.StatusBadRequest)
 		return
 	}
 	if err != nil {
@@ -109,7 +115,8 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 // rank serves GET /decisions/{title}/rank: the injected owner's decision ranked
 // most- to least-desirable by the engine, so the SPA renders the ranking from
 // the single source of truth instead of re-implementing the weighted sum. A
-// title the owner does not own is a 404 (same as get). A decision that loads but
+// title the owner does not own is a 404 (same as get), and a title with no
+// filename-safe characters is a 400 (also same as get). A decision that loads but
 // cannot be ranked yet — an option missing a score, no criteria, a bad weight —
 // is a 422 carrying the engine's reason, a user-fixable state, not a 500.
 func (h *Handler) rank(w http.ResponseWriter, r *http.Request) {
@@ -120,6 +127,10 @@ func (h *Handler) rank(w http.ResponseWriter, r *http.Request) {
 	d, err := h.store.Load(r.Context(), owner, r.PathValue("title"))
 	if errors.Is(err, pondera.ErrNotFound) {
 		http.Error(w, "decision not found", http.StatusNotFound)
+		return
+	}
+	if errors.Is(err, pondera.ErrInvalidTitle) {
+		http.Error(w, "decision title has no usable characters", http.StatusBadRequest)
 		return
 	}
 	if err != nil {

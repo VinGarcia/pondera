@@ -3,6 +3,7 @@ package server_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,6 +12,34 @@ import (
 	"github.com/vingarcia/pondera"
 	"github.com/vingarcia/pondera/server"
 )
+
+// stubStore is a Store test double whose per-method behavior each test wires
+// through the corresponding func field. It lets a test drive the handlers'
+// failure branches — a backend fault surfacing as 500 — without contriving a
+// real filesystem error, which the FileStore does not expose a hook for. A
+// method whose field a test leaves nil is never reached on that test's path.
+type stubStore struct {
+	listFn   func(ctx context.Context, owner string) ([]string, error)
+	loadFn   func(ctx context.Context, owner string, title string) (pondera.Decision, error)
+	saveFn   func(ctx context.Context, d pondera.Decision) error
+	deleteFn func(ctx context.Context, owner string, title string) error
+}
+
+func (s stubStore) List(ctx context.Context, owner string) ([]string, error) {
+	return s.listFn(ctx, owner)
+}
+
+func (s stubStore) Load(ctx context.Context, owner string, title string) (pondera.Decision, error) {
+	return s.loadFn(ctx, owner, title)
+}
+
+func (s stubStore) Save(ctx context.Context, d pondera.Decision) error {
+	return s.saveFn(ctx, d)
+}
+
+func (s stubStore) Delete(ctx context.Context, owner string, title string) error {
+	return s.deleteFn(ctx, owner, title)
+}
 
 // seed writes one minimal decision owned by owner with the given title into
 // store, failing the test on any error.
@@ -518,5 +547,149 @@ func TestDeleteEndpoint(t *testing.T) {
 	// Deleting a title the owner does not hold is a 404, not a silent 204.
 	if r := del(h, "/decisions/buy-car", "alice"); r.Code != http.StatusNotFound {
 		t.Fatalf("DELETE of already-gone decision: status %d, want 404", r.Code)
+	}
+}
+
+// TestUnusableTitleIsClientError covers the read/delete endpoints on a title
+// that is non-empty but has no filename-safe characters (only punctuation). The
+// store returns ErrInvalidTitle, which is the caller's mistake — it must surface
+// as a 400 on every endpoint, never a 500 leaking an internal slug error. create
+// and update already assert this elsewhere; get, rank, and delete are covered
+// here so the whole surface answers consistently. get and rank previously fell
+// through to a 500 on this input, which this test locks the fix for.
+func TestUnusableTitleIsClientError(t *testing.T) {
+	store := pondera.NewFileStore(t.TempDir())
+	h := server.New(store, server.OwnerFromHeader("X-Pondera-Owner"))
+
+	for _, tc := range []struct {
+		name string
+		rec  *httptest.ResponseRecorder
+	}{
+		{name: "GET", rec: get(h, "/decisions/!!!", "alice")},
+		{name: "rank", rec: get(h, "/decisions/!!!/rank", "alice")},
+		{name: "DELETE", rec: del(h, "/decisions/!!!", "alice")},
+	} {
+		if tc.rec.Code != http.StatusBadRequest {
+			t.Fatalf("%s on an unusable title: status %d, want 400; body %q", tc.name, tc.rec.Code, tc.rec.Body.String())
+		}
+	}
+}
+
+// TestHandlerMapsStoreFailuresTo500 proves every handler turns an unexpected
+// backend fault into a 500 rather than panicking, hanging, or leaking a 200 with
+// a misleading body. Each case wires a stubStore whose relevant method fails with
+// a generic (non-sentinel) error; the handler must not mistake it for
+// ErrNotFound/ErrInvalidTitle and must not proceed as if the call succeeded.
+func TestHandlerMapsStoreFailuresTo500(t *testing.T) {
+	boom := errors.New("backend on fire")
+	// found returns a real decision so an update passes its existence check and
+	// reaches Save, isolating the Save-failure branch.
+	found := func(ctx context.Context, owner string, title string) (pondera.Decision, error) {
+		return pondera.Decision{Title: title, Owner: owner}, nil
+	}
+	notFound := func(ctx context.Context, owner string, title string) (pondera.Decision, error) {
+		return pondera.Decision{}, pondera.ErrNotFound
+	}
+
+	for _, tc := range []struct {
+		name  string
+		store stubStore
+		call  func(h http.Handler) *httptest.ResponseRecorder
+	}{
+		{
+			name:  "list fails",
+			store: stubStore{listFn: func(ctx context.Context, owner string) ([]string, error) { return nil, boom }},
+			call:  func(h http.Handler) *httptest.ResponseRecorder { return get(h, "/decisions", "alice") },
+		},
+		{
+			name: "get load fails",
+			store: stubStore{loadFn: func(ctx context.Context, owner string, title string) (pondera.Decision, error) {
+				return pondera.Decision{}, boom
+			}},
+			call: func(h http.Handler) *httptest.ResponseRecorder { return get(h, "/decisions/buy-car", "alice") },
+		},
+		{
+			name: "rank load fails",
+			store: stubStore{loadFn: func(ctx context.Context, owner string, title string) (pondera.Decision, error) {
+				return pondera.Decision{}, boom
+			}},
+			call: func(h http.Handler) *httptest.ResponseRecorder { return get(h, "/decisions/buy-car/rank", "alice") },
+		},
+		{
+			name: "create existence check fails",
+			store: stubStore{loadFn: func(ctx context.Context, owner string, title string) (pondera.Decision, error) {
+				return pondera.Decision{}, boom
+			}},
+			call: func(h http.Handler) *httptest.ResponseRecorder {
+				return post(h, "/decisions", "alice", bodyFor("buy-car", "alice"))
+			},
+		},
+		{
+			name:  "create save fails",
+			store: stubStore{loadFn: notFound, saveFn: func(ctx context.Context, d pondera.Decision) error { return boom }},
+			call: func(h http.Handler) *httptest.ResponseRecorder {
+				return post(h, "/decisions", "alice", bodyFor("buy-car", "alice"))
+			},
+		},
+		{
+			name: "update load fails",
+			store: stubStore{loadFn: func(ctx context.Context, owner string, title string) (pondera.Decision, error) {
+				return pondera.Decision{}, boom
+			}},
+			call: func(h http.Handler) *httptest.ResponseRecorder {
+				return put(h, "/decisions/buy-car", "alice", bodyFor("buy-car", "alice"))
+			},
+		},
+		{
+			name:  "update save fails",
+			store: stubStore{loadFn: found, saveFn: func(ctx context.Context, d pondera.Decision) error { return boom }},
+			call: func(h http.Handler) *httptest.ResponseRecorder {
+				return put(h, "/decisions/buy-car", "alice", bodyFor("buy-car", "alice"))
+			},
+		},
+		{
+			name:  "delete fails",
+			store: stubStore{deleteFn: func(ctx context.Context, owner string, title string) error { return boom }},
+			call:  func(h http.Handler) *httptest.ResponseRecorder { return del(h, "/decisions/buy-car", "alice") },
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := server.New(tc.store, server.OwnerFromHeader("X-Pondera-Owner"))
+			rec := tc.call(h)
+			if rec.Code != http.StatusInternalServerError {
+				t.Fatalf("%s: status %d, want 500; body %q", tc.name, rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+// TestCreateReportsMalformedExistingDecision covers create's remaining error
+// branch: the owner-scoped existence check returns ErrInvalidTitle (the caller's
+// title has no filename-safe form), which must be a 400 — the caller's mistake —
+// rather than the 500 a generic backend fault gets.
+func TestCreateReportsInvalidTitleFromExistenceCheck(t *testing.T) {
+	store := stubStore{
+		loadFn: func(ctx context.Context, owner string, title string) (pondera.Decision, error) {
+			return pondera.Decision{}, pondera.ErrInvalidTitle
+		},
+	}
+	h := server.New(store, server.OwnerFromHeader("X-Pondera-Owner"))
+	if r := post(h, "/decisions", "alice", bodyFor("buy-car", "alice")); r.Code != http.StatusBadRequest {
+		t.Fatalf("create with invalid-title existence check: status %d, want 400; body %q", r.Code, r.Body.String())
+	}
+}
+
+// TestUpdateReportsInvalidTitle covers update's ErrInvalidTitle branch: the
+// path title has no filename-safe form, so the pre-edit existence check reports a
+// 400 rather than a 500.
+func TestUpdateReportsInvalidTitle(t *testing.T) {
+	store := stubStore{
+		loadFn: func(ctx context.Context, owner string, title string) (pondera.Decision, error) {
+			return pondera.Decision{}, pondera.ErrInvalidTitle
+		},
+	}
+	h := server.New(store, server.OwnerFromHeader("X-Pondera-Owner"))
+	if r := put(h, "/decisions/!!!", "alice", bodyFor("!!!", "alice")); r.Code != http.StatusBadRequest {
+		t.Fatalf("update with invalid-title path: status %d, want 400; body %q", r.Code, r.Body.String())
 	}
 }
