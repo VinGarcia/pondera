@@ -550,13 +550,14 @@ func TestDeleteEndpoint(t *testing.T) {
 	}
 }
 
-// TestUnusableTitleIsClientError covers the read/delete endpoints on a title
+// TestUnusableTitleIsClientError covers every title-scoped endpoint on a title
 // that is non-empty but has no filename-safe characters (only punctuation). The
 // store returns ErrInvalidTitle, which is the caller's mistake — it must surface
 // as a 400 on every endpoint, never a 500 leaking an internal slug error. create
-// and update already assert this elsewhere; get, rank, and delete are covered
-// here so the whole surface answers consistently. get and rank previously fell
-// through to a 500 on this input, which this test locks the fix for.
+// asserts this in TestCreateRejectsUnusableTitle; get, rank, update, and delete
+// are covered here so the whole surface answers consistently. get and rank
+// previously fell through to a 500 on this input, which this test locks the fix
+// for.
 func TestUnusableTitleIsClientError(t *testing.T) {
 	store := pondera.NewFileStore(t.TempDir())
 	h := server.New(store, server.OwnerFromHeader("X-Pondera-Owner"))
@@ -567,6 +568,7 @@ func TestUnusableTitleIsClientError(t *testing.T) {
 	}{
 		{name: "GET", rec: get(h, "/decisions/!!!", "alice")},
 		{name: "rank", rec: get(h, "/decisions/!!!/rank", "alice")},
+		{name: "PUT", rec: put(h, "/decisions/!!!", "alice", bodyFor("!!!", "alice"))},
 		{name: "DELETE", rec: del(h, "/decisions/!!!", "alice")},
 	} {
 		if tc.rec.Code != http.StatusBadRequest {
@@ -660,36 +662,5 @@ func TestHandlerMapsStoreFailuresTo500(t *testing.T) {
 				t.Fatalf("%s: status %d, want 500; body %q", tc.name, rec.Code, rec.Body.String())
 			}
 		})
-	}
-}
-
-// TestCreateReportsMalformedExistingDecision covers create's remaining error
-// branch: the owner-scoped existence check returns ErrInvalidTitle (the caller's
-// title has no filename-safe form), which must be a 400 — the caller's mistake —
-// rather than the 500 a generic backend fault gets.
-func TestCreateReportsInvalidTitleFromExistenceCheck(t *testing.T) {
-	store := stubStore{
-		loadFn: func(ctx context.Context, owner string, title string) (pondera.Decision, error) {
-			return pondera.Decision{}, pondera.ErrInvalidTitle
-		},
-	}
-	h := server.New(store, server.OwnerFromHeader("X-Pondera-Owner"))
-	if r := post(h, "/decisions", "alice", bodyFor("buy-car", "alice")); r.Code != http.StatusBadRequest {
-		t.Fatalf("create with invalid-title existence check: status %d, want 400; body %q", r.Code, r.Body.String())
-	}
-}
-
-// TestUpdateReportsInvalidTitle covers update's ErrInvalidTitle branch: the
-// path title has no filename-safe form, so the pre-edit existence check reports a
-// 400 rather than a 500.
-func TestUpdateReportsInvalidTitle(t *testing.T) {
-	store := stubStore{
-		loadFn: func(ctx context.Context, owner string, title string) (pondera.Decision, error) {
-			return pondera.Decision{}, pondera.ErrInvalidTitle
-		},
-	}
-	h := server.New(store, server.OwnerFromHeader("X-Pondera-Owner"))
-	if r := put(h, "/decisions/!!!", "alice", bodyFor("!!!", "alice")); r.Code != http.StatusBadRequest {
-		t.Fatalf("update with invalid-title path: status %d, want 400; body %q", r.Code, r.Body.String())
 	}
 }
