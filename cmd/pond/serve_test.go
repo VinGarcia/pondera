@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -351,6 +352,23 @@ func TestServeHandlerServesVueLocallyNotFromCDN(t *testing.T) {
 	}
 	if js := rec.Body.String(); !strings.Contains(js, "createApp") {
 		t.Fatalf("served vue runtime does not look like Vue (no createApp), got %d bytes", len(js))
+	}
+}
+
+// TestCmdServeArgErrors proves `pond serve` validates its arguments before it
+// ever tries to bind a port: an unknown flag is rejected by the parser, and an
+// empty --owner is refused (an unscoped owner would silently expose every
+// decision under the store root).
+func TestCmdServeArgErrors(t *testing.T) {
+	var sink bytes.Buffer
+	cases := [][]string{
+		{"serve", "--nonsense"},
+		{"serve", "--owner", ""},
+	}
+	for _, args := range cases {
+		if err := run(args, &sink); err == nil {
+			t.Errorf("run(%v) should have errored, got nil", args)
+		}
 	}
 }
 
