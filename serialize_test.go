@@ -1,6 +1,7 @@
 package pondera
 
 import (
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -151,6 +152,18 @@ func TestUnmarshalErrors(t *testing.T) {
 			name: "malformed toml",
 			toml: "title = = broken",
 		},
+		{
+			// A range that is a scalar rather than a two-element array must be
+			// rejected by UnmarshalTOML before it reaches the array decoder.
+			name: "range not an array",
+			toml: "title = \"x\"\n[[criteria]]\nname = \"a\"\nweight = 1\ndirection = \"benefit\"\nrange = 5\n",
+		},
+		{
+			// The low anchor, not just the high one, is validated: a bad keyword in
+			// the first slot fails rather than defaulting.
+			name: "range with bad low anchor",
+			toml: "title = \"x\"\n[[criteria]]\nname = \"a\"\nweight = 1\ndirection = \"benefit\"\nrange = [\"nope\", 100]\n",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -165,4 +178,40 @@ func TestLoadMissingFile(t *testing.T) {
 	if _, err := Load(filepath.Join(t.TempDir(), "nope.toml")); err == nil {
 		t.Error("expected error loading missing file, got nil")
 	}
+}
+
+// TestMarshalRejectsInvalidDirection proves Marshal surfaces an encoder failure
+// rather than emitting a malformed file: a Direction outside the known keywords
+// has no textual form, so MarshalText errors and Marshal must propagate it.
+func TestMarshalRejectsInvalidDirection(t *testing.T) {
+	d := Decision{
+		Title:    "x",
+		Criteria: []Criterion{{Name: "a", Weight: 1, Direction: Direction(99)}},
+	}
+	if _, err := Marshal(d); err == nil {
+		t.Fatal("Marshal of an unknown direction: want error, got nil")
+	}
+}
+
+// TestSaveErrors covers Save's two failure paths: an un-encodable decision (an
+// invalid direction) must fail before any file is created, and a path whose
+// parent directory does not exist must surface the write error.
+func TestSaveErrors(t *testing.T) {
+	t.Run("unencodable decision writes nothing", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "bad.toml")
+		d := Decision{Title: "x", Criteria: []Criterion{{Name: "a", Weight: 1, Direction: Direction(99)}}}
+		if err := Save(path, d); err == nil {
+			t.Fatal("Save of an unknown direction: want error, got nil")
+		}
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("Save wrote a file despite the marshal error: stat err = %v", err)
+		}
+	})
+
+	t.Run("write to a missing directory fails", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "no-such-dir", "carro.toml")
+		if err := Save(path, sampleDecision()); err == nil {
+			t.Fatal("Save into a missing directory: want error, got nil")
+		}
+	})
 }

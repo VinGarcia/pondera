@@ -307,6 +307,39 @@ func TestRankErrors(t *testing.T) {
 // TestParseAnchor covers the CLI/textual anchor forms: the two keywords and any
 // number map to an anchor, and anything else is a loud error rather than a
 // silent zero. Results are compared through String(), the round-trip form.
+// TestDirectionMarshalText renders the two known directions as their keywords and
+// rejects an unknown enum value, so a corrupted in-memory direction fails loudly
+// instead of serializing as a blank or wrong keyword.
+func TestDirectionMarshalText(t *testing.T) {
+	tests := []struct {
+		name    string
+		dir     Direction
+		want    string
+		wantErr bool
+	}{
+		{name: "benefit", dir: Benefit, want: "benefit"},
+		{name: "cost", dir: Cost, want: "cost"},
+		{name: "unknown enum", dir: Direction(99), wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := tt.dir.MarshalText()
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("MarshalText(%d): want error, got %q", int(tt.dir), got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("MarshalText(%d): unexpected error %v", int(tt.dir), err)
+			}
+			if string(got) != tt.want {
+				t.Errorf("MarshalText(%d) = %q, want %q", int(tt.dir), got, tt.want)
+			}
+		})
+	}
+}
+
 func TestParseAnchor(t *testing.T) {
 	tests := []struct {
 		name string
