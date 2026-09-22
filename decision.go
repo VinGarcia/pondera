@@ -88,6 +88,11 @@ func ParseAnchor(s string) (Anchor, error) {
 	if err != nil {
 		return Anchor{}, fmt.Errorf("pondera: anchor must be a number, %q, or %q; got %q", "min", "max", s)
 	}
+	// ParseFloat accepts "nan"/"inf", which would seed a non-finite anchor that
+	// poisons ranking; reject it here so `--range nan,100` fails at edit time.
+	if !finite(v) {
+		return Anchor{}, fmt.Errorf("pondera: anchor must be finite; got %q", s)
+	}
 	return FixedAnchor(v), nil
 }
 
@@ -265,8 +270,9 @@ type Result struct {
 
 // Rank computes each option's desirability and returns the options ordered from
 // most to least desirable (stable on ties). It errors on an empty criteria set,
-// a weight that is not positive and finite, an invalid range, or an option missing a score for any
-// criterion — the engine never silently treats a missing value as zero.
+// a weight that is not positive and finite, an invalid or non-finite range, a
+// non-finite option score, or an option missing a score for any criterion — the
+// engine never silently treats a missing value as zero.
 func (d Decision) Rank() ([]Result, error) {
 	if len(d.Criteria) == 0 {
 		return nil, fmt.Errorf("pondera: decision %q has no criteria", d.Title)
@@ -301,6 +307,9 @@ func (d Decision) Rank() ([]Result, error) {
 			v, ok := o.Scores[c.Name]
 			if !ok {
 				return nil, fmt.Errorf("pondera: option %q missing score for criterion %q", o.Name, c.Name)
+			}
+			if !finite(v) {
+				return nil, fmt.Errorf("pondera: option %q has non-finite score %g for criterion %q; must be finite", o.Name, v, c.Name)
 			}
 			acc += contribution(c, v, bounds[c.Name]) * c.Weight
 		}
@@ -353,6 +362,14 @@ func (d Decision) resolveBounds() (map[string]bounds, error) {
 			}
 		}
 		b := bounds{lo: lo.resolve(s), hi: hi.resolve(s)}
+		// A non-finite bound slips past the hi <= lo and hi < lo checks (every
+		// comparison with NaN is false) and then drives contribution's ratio to
+		// NaN, poisoning every score. A fixed nan/inf anchor from a hand-edited
+		// TOML/JSON file, or a "min"/"max" anchor resolved over a non-finite
+		// score, reaches here, so reject both.
+		if !finite(b.lo) || !finite(b.hi) {
+			return nil, fmt.Errorf("pondera: criterion %q range %s resolved to non-finite bounds [%g, %g]; anchors must be finite", c.Name, c.Range, b.lo, b.hi)
+		}
 		if b.hi < b.lo {
 			return nil, fmt.Errorf("pondera: criterion %q range %s resolved to [%g, %g]; the options' values contradict the anchors", c.Name, c.Range, b.lo, b.hi)
 		}
@@ -385,6 +402,17 @@ func contribution(c Criterion, v float64, b bounds) float64 {
 // hand-edited TOML file, which permits `nan`/`inf`, so it is rejected here.
 func usableWeight(w float64) bool {
 	return w > 0 && !math.IsInf(w, 1)
+}
+
+// finite reports whether x is a real number — neither NaN nor ±Inf. Option
+// scores and resolved range bounds must be finite: a NaN propagates through
+// contribution to poison every score (and NaN is unencodable, breaking the JSON
+// API), and an infinite bound drives the normalized ratio to NaN. Unlike a
+// weight a score or fixed anchor may be negative or zero, so only NaN and ±Inf
+// are rejected. Such values reach Rank from a hand-edited TOML/JSON file, which
+// permits nan/inf, bypassing the CLI's own guards.
+func finite(x float64) bool {
+	return !math.IsNaN(x) && !math.IsInf(x, 0)
 }
 
 func clamp(v, lo, hi float64) float64 {

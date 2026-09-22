@@ -261,6 +261,42 @@ func TestRankErrors(t *testing.T) {
 			},
 		},
 		{
+			// A hand-edited TOML/JSON file (TOML permits `nan`) can carry a NaN
+			// score, which the clamp in contribution leaves NaN (NaN comparisons
+			// are false), poisoning the option and breaking the JSON API.
+			name: "NaN score",
+			decision: Decision{
+				Criteria: []Criterion{{Name: "x", Weight: 1}},
+				Options:  []Option{{Name: "A", Scores: map[string]float64{"x": math.NaN()}}},
+			},
+		},
+		{
+			// The +Inf mirror: an infinite score is equally non-finite and unusable.
+			name: "infinite score",
+			decision: Decision{
+				Criteria: []Criterion{{Name: "x", Weight: 1}},
+				Options:  []Option{{Name: "A", Scores: map[string]float64{"x": math.Inf(1)}}},
+			},
+		},
+		{
+			// A fixed NaN anchor passes the hi <= lo check (NaN comparisons are
+			// false) and would drive contribution's ratio to NaN; reject it as a
+			// non-finite resolved bound.
+			name: "NaN fixed anchor",
+			decision: Decision{
+				Criteria: []Criterion{{Name: "x", Weight: 1, Range: NewRange(FixedAnchor(math.NaN()), FixedAnchor(100))}},
+				Options:  []Option{{Name: "A", Scores: map[string]float64{"x": 10}}},
+			},
+		},
+		{
+			// The +Inf mirror on the hi anchor.
+			name: "infinite fixed anchor",
+			decision: Decision{
+				Criteria: []Criterion{{Name: "x", Weight: 1, Range: NewRange(FixedAnchor(0), FixedAnchor(math.Inf(1)))}},
+				Options:  []Option{{Name: "A", Scores: map[string]float64{"x": 10}}},
+			},
+		},
+		{
 			// [0, "max"] over an all-negative field resolves to hi < lo: the
 			// data contradicts the anchors — bad data, not a valid case.
 			name: "zero-max anchors contradicted by all-negative values",
@@ -394,6 +430,11 @@ func TestParseAnchorErrors(t *testing.T) {
 		{name: "empty", in: ""},
 		{name: "not a number", in: "abc"},
 		{name: "embedded comma", in: "1,2"},
+		// strconv.ParseFloat accepts these, but a non-finite anchor poisons ranking,
+		// so `pond add-criterion --range nan,100` must fail at edit time.
+		{name: "NaN", in: "nan"},
+		{name: "positive infinity", in: "inf"},
+		{name: "negative infinity", in: "-inf"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -447,6 +488,56 @@ func TestParseRangeErrors(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if _, err := ParseRange(tt.in); err == nil {
 				t.Fatalf("ParseRange(%q) = nil error, want rejection", tt.in)
+			}
+		})
+	}
+}
+
+// TestRankRejectsNonFiniteFromTOML exercises the poisoned-file path end to end:
+// TOML permits the float literals `nan`/`inf`, so a hand-edited decision file
+// can carry a non-finite score or fixed range anchor that never passed through
+// the CLI's own guards. Both decode cleanly and must be rejected at Rank rather
+// than silently poison the ranking (NaN is also unencodable, breaking /rank).
+func TestRankRejectsNonFiniteFromTOML(t *testing.T) {
+	tests := []struct {
+		name string
+		toml string
+	}{
+		{
+			name: "non-finite score",
+			toml: `title = "t"
+[[criteria]]
+name = "x"
+weight = 1
+range = [0, 100]
+
+[[options]]
+name = "A"
+scores = { x = nan }
+`,
+		},
+		{
+			name: "non-finite fixed anchor",
+			toml: `title = "t"
+[[criteria]]
+name = "x"
+weight = 1
+range = [nan, 100]
+
+[[options]]
+name = "A"
+scores = { x = 10 }
+`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d, err := Unmarshal([]byte(tt.toml))
+			if err != nil {
+				t.Fatalf("Unmarshal: %v", err)
+			}
+			if _, err := d.Rank(); err == nil {
+				t.Fatalf("Rank() = nil error, want rejection of non-finite input")
 			}
 		})
 	}

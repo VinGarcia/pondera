@@ -81,9 +81,12 @@ func (d *Decision) AddOption(o Option) error {
 	if d.option(o.Name) != nil {
 		return fmt.Errorf("pondera: option %q already exists", o.Name)
 	}
-	for name := range o.Scores {
+	for name, v := range o.Scores {
 		if d.criterion(name) == nil {
 			return fmt.Errorf("pondera: option %q scores unknown criterion %q", o.Name, name)
+		}
+		if !finite(v) {
+			return fmt.Errorf("pondera: option %q has non-finite score %g for criterion %q; must be finite", o.Name, v, name)
 		}
 	}
 	d.Options = append(d.Options, o)
@@ -101,6 +104,9 @@ func (d *Decision) SetScore(option string, criterion string, v float64) error {
 	o := d.option(option)
 	if o == nil {
 		return fmt.Errorf("pondera: no option named %q", option)
+	}
+	if !finite(v) {
+		return fmt.Errorf("pondera: score for %q on %q must be finite, got %g", option, criterion, v)
 	}
 	if o.Scores == nil {
 		o.Scores = make(map[string]float64)

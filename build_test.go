@@ -148,6 +148,26 @@ func TestBuildGuards(t *testing.T) {
 		{"set score unknown option", func() error {
 			return locked().SetScore("ghost", "safety", 1)
 		}},
+		{"NaN score on add option", func() error {
+			return locked().AddOption(Option{Name: "x", Scores: map[string]float64{"safety": math.NaN()}})
+		}},
+		{"infinite score on add option", func() error {
+			return locked().AddOption(Option{Name: "x", Scores: map[string]float64{"safety": math.Inf(1)}})
+		}},
+		{"NaN score on set", func() error {
+			d := locked()
+			if err := d.AddOption(Option{Name: "x", Scores: map[string]float64{"safety": 1}}); err != nil {
+				t.Fatalf("seed AddOption: %v", err)
+			}
+			return d.SetScore("x", "safety", math.NaN())
+		}},
+		{"infinite score on set", func() error {
+			d := locked()
+			if err := d.AddOption(Option{Name: "x", Scores: map[string]float64{"safety": 1}}); err != nil {
+				t.Fatalf("seed AddOption: %v", err)
+			}
+			return d.SetScore("x", "safety", math.Inf(1))
+		}},
 	}
 
 	for _, tc := range cases {
