@@ -236,6 +236,24 @@ func TestRankErrors(t *testing.T) {
 			},
 		},
 		{
+			// A hand-edited TOML file (TOML permits `nan`) can carry a NaN weight,
+			// which a plain weight <= 0 check misses (NaN <= 0 is false), poisoning
+			// every score to NaN and breaking the JSON API (NaN is unencodable).
+			name: "NaN weight",
+			decision: Decision{
+				Criteria: []Criterion{{Name: "x", Weight: math.NaN()}},
+				Options:  []Option{{Name: "A", Scores: map[string]float64{"x": 10}}},
+			},
+		},
+		{
+			// The +Inf mirror: `weight = inf` also slips past weight <= 0.
+			name: "positive-infinity weight",
+			decision: Decision{
+				Criteria: []Criterion{{Name: "x", Weight: math.Inf(1)}},
+				Options:  []Option{{Name: "A", Scores: map[string]float64{"x": 10}}},
+			},
+		},
+		{
 			name: "missing score",
 			decision: Decision{
 				Criteria: []Criterion{{Name: "x", Weight: 1}},

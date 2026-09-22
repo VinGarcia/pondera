@@ -1,6 +1,9 @@
 package pondera
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 // TestBuildFlow walks the disciplined path — declare criteria and weights, lock,
 // then add options and scores — and confirms the built decision ranks correctly
@@ -106,6 +109,18 @@ func TestBuildGuards(t *testing.T) {
 		}},
 		{"non-positive weight on set", func() error {
 			return open().SetWeight("safety", -1)
+		}},
+		{"NaN weight on add", func() error {
+			return open().AddCriterion(Criterion{Name: "price", Weight: math.NaN()})
+		}},
+		{"infinite weight on add", func() error {
+			return open().AddCriterion(Criterion{Name: "price", Weight: math.Inf(1)})
+		}},
+		{"NaN weight on set", func() error {
+			return open().SetWeight("safety", math.NaN())
+		}},
+		{"infinite weight on set", func() error {
+			return open().SetWeight("safety", math.Inf(1))
 		}},
 		{"set weight unknown criterion", func() error {
 			return open().SetWeight("ghost", 2)

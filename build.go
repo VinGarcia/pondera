@@ -27,8 +27,8 @@ func (d *Decision) AddCriterion(c Criterion) error {
 	if c.Name == "" {
 		return fmt.Errorf("pondera: criterion name is empty")
 	}
-	if c.Weight <= 0 {
-		return fmt.Errorf("pondera: criterion %q has non-positive weight %g", c.Name, c.Weight)
+	if !usableWeight(c.Weight) {
+		return fmt.Errorf("pondera: criterion %q has invalid weight %g; must be positive and finite", c.Name, c.Weight)
 	}
 	if d.criterion(c.Name) != nil {
 		return fmt.Errorf("pondera: criterion %q already exists", c.Name)
@@ -42,8 +42,8 @@ func (d *Decision) SetWeight(name string, w float64) error {
 	if d.Locked() {
 		return fmt.Errorf("pondera: cannot set weight for %q after lock", name)
 	}
-	if w <= 0 {
-		return fmt.Errorf("pondera: weight for %q must be positive, got %g", name, w)
+	if !usableWeight(w) {
+		return fmt.Errorf("pondera: weight for %q must be positive and finite, got %g", name, w)
 	}
 	c := d.criterion(name)
 	if c == nil {

@@ -12,6 +12,7 @@ package pondera
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -264,7 +265,7 @@ type Result struct {
 
 // Rank computes each option's desirability and returns the options ordered from
 // most to least desirable (stable on ties). It errors on an empty criteria set,
-// a non-positive weight, an invalid range, or an option missing a score for any
+// a weight that is not positive and finite, an invalid range, or an option missing a score for any
 // criterion — the engine never silently treats a missing value as zero.
 func (d Decision) Rank() ([]Result, error) {
 	if len(d.Criteria) == 0 {
@@ -274,8 +275,8 @@ func (d Decision) Rank() ([]Result, error) {
 	var totalWeight float64
 	seen := make(map[string]bool, len(d.Criteria))
 	for _, c := range d.Criteria {
-		if c.Weight <= 0 {
-			return nil, fmt.Errorf("pondera: criterion %q has non-positive weight %g", c.Name, c.Weight)
+		if !usableWeight(c.Weight) {
+			return nil, fmt.Errorf("pondera: criterion %q has invalid weight %g; must be positive and finite", c.Name, c.Weight)
 		}
 		// Names key the per-criterion score and bounds maps, so a duplicate would
 		// silently double-count its weight while the maps hold one entry. The
@@ -375,6 +376,15 @@ func contribution(c Criterion, v float64, b bounds) float64 {
 		norm = 100 - norm
 	}
 	return norm
+}
+
+// usableWeight reports whether w is a valid criterion weight: strictly positive
+// and finite. A plain w <= 0 check misses non-finite values — both NaN <= 0 and
+// +Inf <= 0 are false — which then poison the weighted sum (totalWeight goes
+// NaN/Inf and every option scores NaN). Such a weight reaches Rank from a
+// hand-edited TOML file, which permits `nan`/`inf`, so it is rejected here.
+func usableWeight(w float64) bool {
+	return w > 0 && !math.IsInf(w, 1)
 }
 
 func clamp(v, lo, hi float64) float64 {
