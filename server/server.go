@@ -36,10 +36,18 @@ func OwnerFromHeader(name string) OwnerFunc {
 const publicIDHeader = "X-Pondera-Public-Id"
 
 // canonicalUUID matches the RFC-4122 text form crypto.randomUUID() emits: 32
-// lowercase hex digits grouped 8-4-4-4-12. OwnerFromPublicID accepts only this
-// shape, so the header the SPA sends is the exact header the server enforces —
-// the same regex the browser-render test pins the sent value against.
+// lowercase hex digits grouped 8-4-4-4-12. IsPublicID is the one predicate that
+// enforces this shape, so the header the SPA sends is the exact header the server
+// enforces — and the browser-render test pins the sent value against the same check.
 var canonicalUUID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+// IsPublicID reports whether id is a canonical RFC-4122 UUID — the per-browser
+// public identity pondera's public demo mode mints with crypto.randomUUID() and
+// the only value OwnerFromPublicID accepts as an owner. It is the single source of
+// truth for that shape, shared by the server and its render test.
+func IsPublicID(id string) bool {
+	return canonicalUUID.MatchString(id)
+}
 
 // OwnerFromPublicID returns the OwnerFunc pondera's public demo mode runs on: it
 // reads the visitor's per-browser id from the X-Pondera-Public-Id header and
@@ -56,7 +64,7 @@ var canonicalUUID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-
 func OwnerFromPublicID() OwnerFunc {
 	return func(r *http.Request) string {
 		id := r.Header.Get(publicIDHeader)
-		if !canonicalUUID.MatchString(id) {
+		if !IsPublicID(id) {
 			return ""
 		}
 		return id

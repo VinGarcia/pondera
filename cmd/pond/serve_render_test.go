@@ -4,19 +4,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
-	"regexp"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/vingarcia/pondera"
+	"github.com/vingarcia/pondera/server"
 	"github.com/vingarcia/pondera/webui"
 )
-
-// canonicalUUID is the RFC-4122 36-char lowercase form the public backend
-// enforces and crypto.randomUUID() emits; the render test asserts the header the
-// SPA sent matches it exactly, so a non-canonical id would fail.
-var canonicalUUID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 // chromeDumpDOM renders url in headless Chrome and returns the post-JavaScript
 // DOM (what Vue actually mounted, not the served source). It SKIPS the test when
@@ -275,7 +270,7 @@ func TestServeHandlerRendersDemoModeInBrowser(t *testing.T) {
 	mu.Lock()
 	got := gotPublicID
 	mu.Unlock()
-	if !canonicalUUID.MatchString(got) {
+	if !server.IsPublicID(got) {
 		t.Fatalf("public backend received X-Pondera-Public-Id %q, want a canonical RFC-4122 UUID", got)
 	}
 }
