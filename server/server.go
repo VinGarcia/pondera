@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"regexp"
 
 	"github.com/vingarcia/pondera"
 )
@@ -26,6 +27,39 @@ type OwnerFunc func(r *http.Request) string
 func OwnerFromHeader(name string) OwnerFunc {
 	return func(r *http.Request) string {
 		return r.Header.Get(name)
+	}
+}
+
+// publicIDHeader carries the per-browser identity pondera's public demo mode
+// mints. The SPA sets it (see the webui package) from crypto.randomUUID(); the
+// server side that trusts it is OwnerFromPublicID below.
+const publicIDHeader = "X-Pondera-Public-Id"
+
+// canonicalUUID matches the RFC-4122 text form crypto.randomUUID() emits: 32
+// lowercase hex digits grouped 8-4-4-4-12. OwnerFromPublicID accepts only this
+// shape, so the header the SPA sends is the exact header the server enforces —
+// the same regex the browser-render test pins the sent value against.
+var canonicalUUID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+// OwnerFromPublicID returns the OwnerFunc pondera's public demo mode runs on: it
+// reads the visitor's per-browser id from the X-Pondera-Public-Id header and
+// accepts it as the owner ONLY when it is a canonical UUID — the form the SPA
+// mints with crypto.randomUUID(). Any other value (empty, a short guess, an
+// arbitrary or uppercased string) resolves to "", which the handler answers 401.
+//
+// The UUID check is the security boundary of the shared public keyspace, not a
+// cosmetic one: OwnerFromHeader on this same header would take a raw
+// client-controlled string, letting a caller name any owner and squat on — or
+// collide into — another visitor's slice with a crafted header. Requiring a
+// well-formed random 122-bit id keeps a visitor's public decisions addressable
+// only by the browser that generated the id, never by a guessable name.
+func OwnerFromPublicID() OwnerFunc {
+	return func(r *http.Request) string {
+		id := r.Header.Get(publicIDHeader)
+		if !canonicalUUID.MatchString(id) {
+			return ""
+		}
+		return id
 	}
 }
 

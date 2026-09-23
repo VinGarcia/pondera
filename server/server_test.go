@@ -664,3 +664,95 @@ func TestHandlerMapsStoreFailuresTo500(t *testing.T) {
 		})
 	}
 }
+
+// getWithPublicID issues a GET to path with the X-Pondera-Public-Id header set to
+// id (omitted entirely when id is empty, to exercise the missing-header path) and
+// returns the response recorder.
+func getWithPublicID(h http.Handler, path, id string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	if id != "" {
+		req.Header.Set("X-Pondera-Public-Id", id)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+// TestOwnerFromPublicIDScopesToTheUUID proves the public demo mode's owner
+// extractor is a real isolation boundary, not just a shape check: a request whose
+// X-Pondera-Public-Id is a canonical UUID is served as THAT owner, so two
+// different browser ids see two disjoint keyspaces and neither can read the
+// other's decision by title. This is the load-bearing half — a stub that returned
+// a constant owner would leak one visitor's decisions to another and fail here.
+func TestOwnerFromPublicIDScopesToTheUUID(t *testing.T) {
+	const (
+		aliceID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
+		bobID   = "9c858901-8a57-4791-81fe-4c455b099bc9"
+	)
+	store := pondera.NewFileStore(t.TempDir())
+	seed(t, store, aliceID, "hire-decision")
+	seed(t, store, bobID, "buy-car")
+
+	h := server.New(store, server.OwnerFromPublicID())
+
+	// The id-scoped list returns only the decisions minted under that browser id.
+	for _, tc := range []struct {
+		id   string
+		want string
+		deny string
+	}{
+		{id: aliceID, want: "hire-decision", deny: "buy-car"},
+		{id: bobID, want: "buy-car", deny: "hire-decision"},
+	} {
+		rec := getWithPublicID(h, "/decisions", tc.id)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET /decisions as %s: status %d, want 200", tc.id, rec.Code)
+		}
+		var titles []string
+		if err := json.Unmarshal(rec.Body.Bytes(), &titles); err != nil {
+			t.Fatalf("GET /decisions as %s: decoding %q: %v", tc.id, rec.Body.String(), err)
+		}
+		if len(titles) != 1 || titles[0] != tc.want {
+			t.Fatalf("GET /decisions as %s: got %v, want [%s]", tc.id, titles, tc.want)
+		}
+	}
+
+	// A different-but-valid id cannot read a decision minted under another id, even
+	// knowing its exact title — the returned owner is the id, not a shared constant.
+	if rec := getWithPublicID(h, "/decisions/hire-decision", bobID); rec.Code != http.StatusNotFound {
+		t.Fatalf("GET alice's decision as bob: status %d, want 404", rec.Code)
+	}
+}
+
+// TestOwnerFromPublicIDRejectsNonCanonicalIDs is the non-vacuity bite: every value
+// that is NOT the canonical UUID the SPA mints resolves to no owner, so the
+// handler answers 401. Without the regex guard a public host wiring this header
+// through OwnerFromHeader would accept any of these as an owner, letting a caller
+// squat on a guessable slice of the shared keyspace. The seeded decision exists,
+// so a 200 here would mean the bad id was accepted and leaked it.
+func TestOwnerFromPublicIDRejectsNonCanonicalIDs(t *testing.T) {
+	const validID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
+	store := pondera.NewFileStore(t.TempDir())
+	seed(t, store, validID, "hire-decision")
+
+	h := server.New(store, server.OwnerFromPublicID())
+
+	for _, tc := range []struct {
+		name string
+		id   string
+	}{
+		{name: "missing header", id: ""},
+		{name: "arbitrary string", id: "alice"},
+		{name: "uppercase hex", id: "3F2504E0-4F89-41D3-9A0C-0305E82C3301"},
+		{name: "too short", id: "3f2504e0-4f89-41d3-9a0c-0305e82c330"},
+		{name: "trailing character", id: "3f2504e0-4f89-41d3-9a0c-0305e82c3301x"},
+		{name: "surrounding spaces", id: " 3f2504e0-4f89-41d3-9a0c-0305e82c3301 "},
+		{name: "hyphens stripped", id: "3f2504e04f8941d39a0c0305e82c3301"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if rec := getWithPublicID(h, "/decisions", tc.id); rec.Code != http.StatusUnauthorized {
+				t.Fatalf("GET /decisions with %s id %q: status %d, want 401", tc.name, tc.id, rec.Code)
+			}
+		})
+	}
+}
