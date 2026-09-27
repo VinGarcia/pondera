@@ -301,7 +301,17 @@ func (d Decision) Rank() ([]Result, error) {
 	}
 
 	results := make([]Result, 0, len(d.Options))
+	seenOptions := make(map[string]bool, len(d.Options))
 	for _, o := range d.Options {
+		// Two options with the same name are ambiguous: both would appear in the
+		// results as indistinguishable rows, and the builder's option() lookup can
+		// only ever address the first, leaving the second an unaddressable shadow.
+		// The builder guards this, but a hand-edited file or an API payload reaches
+		// Rank directly, so it must fail loudly here too.
+		if seenOptions[o.Name] {
+			return nil, fmt.Errorf("pondera: duplicate option %q", o.Name)
+		}
+		seenOptions[o.Name] = true
 		var acc float64
 		for _, c := range d.Criteria {
 			v, ok := o.Scores[c.Name]

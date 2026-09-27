@@ -338,6 +338,21 @@ func TestRankErrors(t *testing.T) {
 			},
 		},
 		{
+			// The option mirror of the duplicate-criterion case: a hand-edited file
+			// or API payload can carry two options with the same name, which the
+			// builder guards but Rank is reached directly. Two same-named options
+			// produce indistinguishable result rows and only the first is ever
+			// addressable, so Rank must reject them rather than rank a shadow.
+			name: "duplicate option name",
+			decision: Decision{
+				Criteria: []Criterion{{Name: "x", Weight: 1}},
+				Options: []Option{
+					{Name: "A", Scores: map[string]float64{"x": 10}},
+					{Name: "A", Scores: map[string]float64{"x": 90}},
+				},
+			},
+		},
+		{
 			name: "missing score on normalized criterion",
 			decision: Decision{
 				Criteria: []Criterion{{Name: "x", Weight: 1, Range: NewRange(MinAnchor(), MaxAnchor())}},
