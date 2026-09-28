@@ -269,6 +269,15 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 	d.Owner = owner
 	d.Title = title
 	if err := h.store.Save(r.Context(), d); err != nil {
+		// The path title can slug onto a *different* stored decision — a rename
+		// collision, e.g. PUT /decisions/lunch! when "Lunch" already occupies that
+		// slug. The store refuses to clobber the other decision with ErrTitleConflict;
+		// that is a client-side naming clash, not a server fault, so it is a 409, not
+		// the generic 500 an unexpected backend error still falls through to.
+		if errors.Is(err, pondera.ErrTitleConflict) {
+			http.Error(w, "decision title collides with a different decision", http.StatusConflict)
+			return
+		}
 		http.Error(w, "saving decision", http.StatusInternalServerError)
 		return
 	}

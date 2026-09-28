@@ -793,3 +793,56 @@ func TestRejectsUnknownFields(t *testing.T) {
 		t.Fatalf("stored decision has %d options after a rejected update, want 1 (malformed payload must not wipe data)", len(got.Options))
 	}
 }
+
+// TestUpdateRejectsTitleConflict covers the rename-collision breadcrumb the store
+// left in ErrTitleConflict: a PUT whose path title slugs onto a *different* stored
+// decision ("lunch!" resolves to the file "Lunch" already occupies) must not
+// clobber that decision. The store refuses the overwrite with ErrTitleConflict —
+// a client-side naming clash, not a server fault — so the handler answers 409, not
+// the generic 500 the unmapped error previously produced, and the stored decision
+// is left untouched.
+func TestUpdateRejectsTitleConflict(t *testing.T) {
+	store := pondera.NewFileStore(t.TempDir())
+	h := server.New(store, server.OwnerFromHeader("X-Pondera-Owner"))
+
+	// Seed alice's "Lunch" with a distinguishable safety score so a would-be
+	// overwrite is detectable by reading the score back.
+	original := pondera.Decision{
+		Title:    "Lunch",
+		Owner:    "alice",
+		Criteria: []pondera.Criterion{{Name: "safety", Weight: 1}},
+		Options:  []pondera.Option{{Name: "a", Scores: map[string]float64{"safety": 80}}},
+	}
+	if err := store.Save(context.Background(), original); err != nil {
+		t.Fatalf("seeding original decision: %v", err)
+	}
+
+	// PUT to "lunch!" slugs to the same file as "Lunch" but is a different exact
+	// title, so Save would overwrite a distinct decision. It must be a 409, not a
+	// 500 and not a silent overwrite. The body carries score 30 to prove the
+	// rejected write never lands.
+	if r := put(h, "/decisions/lunch!", "alice", bodyScored("lunch!", "alice", 30)); r.Code != http.StatusConflict {
+		t.Fatalf("PUT rename collision: status %d, want 409; body %q", r.Code, r.Body.String())
+	}
+
+	// The stored decision is intact: its exact title is still "Lunch" and its score
+	// is still 80, proving the 409 protected the different decision rather than
+	// returning a conflict status after clobbering it.
+	got, err := store.Load(context.Background(), "alice", "Lunch")
+	if err != nil {
+		t.Fatalf("loading after rejected collision: %v", err)
+	}
+	if got.Title != "Lunch" {
+		t.Fatalf("stored title = %q, want Lunch (collision must not rename)", got.Title)
+	}
+	if s := got.Options[0].Scores["safety"]; s != 80 {
+		t.Fatalf("stored safety score = %v, want 80 (rejected write must not overwrite)", s)
+	}
+	list, err := store.List(context.Background(), "alice")
+	if err != nil {
+		t.Fatalf("listing after rejected collision: %v", err)
+	}
+	if len(list) != 1 || list[0] != "Lunch" {
+		t.Fatalf("alice owns %v after rejected collision, want [Lunch] (no decision destroyed or created)", list)
+	}
+}
