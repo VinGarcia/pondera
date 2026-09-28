@@ -197,8 +197,8 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var d pondera.Decision
-	if err := json.NewDecoder(r.Body).Decode(&d); err != nil {
+	d, err := decodeDecision(r)
+	if err != nil {
 		http.Error(w, "invalid decision body", http.StatusBadRequest)
 		return
 	}
@@ -258,8 +258,8 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "loading decision", http.StatusInternalServerError)
 		return
 	}
-	var d pondera.Decision
-	if err := json.NewDecoder(r.Body).Decode(&d); err != nil {
+	d, err := decodeDecision(r)
+	if err != nil {
 		http.Error(w, "invalid decision body", http.StatusBadRequest)
 		return
 	}
@@ -300,6 +300,24 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// decodeDecision reads a Decision from a JSON request body, rejecting a field
+// the schema does not know (a typo'd key) rather than silently dropping it. This
+// mirrors the TOML decoder's documented contract (see pondera.Unmarshal): the two
+// ingestion paths for the same Decision must fail a malformed payload the same
+// way. It matters most on PUT, a full replace — a misspelled "options" or
+// "criteria" key would otherwise decode to an absent field, and Save would wipe
+// the stored value, silently losing the decider's data. Failing loudly with a 400
+// keeps the stored decision intact.
+func decodeDecision(r *http.Request) (pondera.Decision, error) {
+	var d pondera.Decision
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&d); err != nil {
+		return pondera.Decision{}, err
+	}
+	return d, nil
 }
 
 // writeJSON encodes v as the JSON response body. An encoding failure is logged

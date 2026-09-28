@@ -756,3 +756,40 @@ func TestOwnerFromPublicIDRejectsNonCanonicalIDs(t *testing.T) {
 		})
 	}
 }
+
+// TestRejectsUnknownFields holds the JSON API to the same contract the TOML
+// decoder documents and enforces (pondera.Unmarshal reports a typo'd key rather
+// than dropping it): an unknown field in a create or update body is a client
+// error, not a silent drop. On PUT this is a data-integrity guarantee — a
+// misspelled "options" key decodes to an absent field, and the full-replace Save
+// would wipe the stored options — so the malformed payload must be refused with a
+// 400 and the stored decision left intact.
+func TestRejectsUnknownFields(t *testing.T) {
+	store := pondera.NewFileStore(t.TempDir())
+	h := server.New(store, server.OwnerFromHeader("X-Pondera-Owner"))
+
+	// A POST carrying an unknown top-level key is a 400, and nothing is persisted.
+	badCreate := `{"title":"buy-car","owner":"alice","criteria":[{"name":"safety","weight":1}],"optoins":[]}`
+	if r := post(h, "/decisions", "alice", badCreate); r.Code != http.StatusBadRequest {
+		t.Fatalf("POST with unknown field: status %d, want 400; body %q", r.Code, r.Body.String())
+	}
+	if titles, _ := store.List(context.Background(), "alice"); len(titles) != 0 {
+		t.Fatalf("alice owns %v after a rejected POST, want none", titles)
+	}
+
+	// Seed a real decision (one option), then PUT a body whose "options" key is
+	// misspelled. The unknown field must be rejected as a 400; the misspelling must
+	// NOT slip through and wipe the stored option via the full-replace Save.
+	seed(t, store, "alice", "buy-car")
+	badUpdate := `{"title":"buy-car","criteria":[{"name":"safety","weight":1}],"optoins":[]}`
+	if r := put(h, "/decisions/buy-car", "alice", badUpdate); r.Code != http.StatusBadRequest {
+		t.Fatalf("PUT with unknown field: status %d, want 400; body %q", r.Code, r.Body.String())
+	}
+	got, err := store.Load(context.Background(), "alice", "buy-car")
+	if err != nil {
+		t.Fatalf("loading after rejected update: %v", err)
+	}
+	if len(got.Options) != 1 {
+		t.Fatalf("stored decision has %d options after a rejected update, want 1 (malformed payload must not wipe data)", len(got.Options))
+	}
+}
