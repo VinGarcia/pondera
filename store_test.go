@@ -348,6 +348,58 @@ func TestFileStoreSlugsMultiWordIdentity(t *testing.T) {
 	}
 }
 
+// TestFileStoreSaveRejectsSlugCollision proves Save never silently clobbers a
+// different decision that slugs to the same on-disk path. Two distinct titles
+// ("Lunch" and "lunch!") collapse to one file; saving the second must fail with
+// ErrTitleConflict and leave the first intact, rather than overwriting it and
+// making a later Load of the original title return the impostor's contents. A
+// re-save of the same (owner, title) is a normal update and must still succeed.
+func TestFileStoreSaveRejectsSlugCollision(t *testing.T) {
+	s := NewFileStore(t.TempDir())
+	first := decisionFor("alice", "Lunch")
+	if err := s.Save(context.Background(), first); err != nil {
+		t.Fatalf("Save first: %v", err)
+	}
+
+	// A different title that slugs to the same path must be rejected, not written.
+	colliding := decisionFor("alice", "lunch!")
+	colliding.Criteria[0].Weight = 99 // make it distinguishable from the first
+	if err := s.Save(context.Background(), colliding); !errors.Is(err, ErrTitleConflict) {
+		t.Fatalf("Save colliding title: got %v, want ErrTitleConflict", err)
+	}
+
+	// The original decision is untouched: its title still lists, and loading it
+	// returns the first decision, not the impostor's contents.
+	got, err := s.Load(context.Background(), "alice", "Lunch")
+	if err != nil {
+		t.Fatalf("Load original after rejected collision: %v", err)
+	}
+	if !reflect.DeepEqual(got, first) {
+		t.Errorf("original decision corrupted by rejected collision:\n got %+v\nwant %+v", got, first)
+	}
+	list, err := s.List(context.Background(), "alice")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if !reflect.DeepEqual(list, []string{"Lunch"}) {
+		t.Errorf("List = %v, want only the original title", list)
+	}
+
+	// Re-saving the same (owner, title) is a legitimate update, not a conflict.
+	update := decisionFor("alice", "Lunch")
+	update.Options[0].Scores["value"] = 42
+	if err := s.Save(context.Background(), update); err != nil {
+		t.Fatalf("Save update of same identity: got %v, want it to succeed", err)
+	}
+	got, err = s.Load(context.Background(), "alice", "Lunch")
+	if err != nil {
+		t.Fatalf("Load after update: %v", err)
+	}
+	if got.Options[0].Scores["value"] != 42 {
+		t.Errorf("update not persisted: score = %v, want 42", got.Options[0].Scores["value"])
+	}
+}
+
 // TestFileStoreDeleteReportsIOError covers Delete's non-not-exist failure: when
 // the target path is a non-empty directory os.Remove refuses it, and Delete must
 // surface that error rather than the ErrNotFound it reserves for a decision the

@@ -23,6 +23,17 @@ var ErrNotFound = errors.New("pondera: decision not found")
 // error strings.
 var ErrInvalidTitle = errors.New("pondera: title has no filename-safe characters")
 
+// ErrTitleConflict is returned by Save when a *different* decision already
+// occupies the storage identity the decision being saved resolves to. Two
+// distinct (owner, title) pairs can collapse to the same key — the FileStore
+// slugs both into one path, so "Lunch" and "lunch!" address the same file — and
+// blindly writing would clobber the decision already there, losing it and making
+// a later Load of the original title return the survivor's contents. Like
+// ErrNotFound it is part of the port so a caller (an HTTP layer) can map it to a
+// 409 without matching backend error strings. Re-saving the same (owner, title)
+// is an update, not a conflict.
+var ErrTitleConflict = errors.New("pondera: a different decision already occupies this title")
+
 // A Store persists decisions scoped by owner. Save and Load address a decision
 // by its (Owner, Title) identity; List returns the titles a single owner owns,
 // never leaking another owner's decisions. The interface keeps the persistence
@@ -113,6 +124,22 @@ func (s *FileStore) Save(ctx context.Context, d Decision) error {
 	p, err := s.path(d.Owner, d.Title)
 	if err != nil {
 		return err
+	}
+	// Distinct (owner, title) pairs can slug to the same path ("Lunch" and
+	// "lunch!" collide), so a blind write would silently clobber a *different*
+	// decision and lose it — a later Load of the original title would then return
+	// the survivor's contents. Refuse the write unless the file already there is
+	// the same decision (a legitimate update). A missing file is a fresh create;
+	// a corrupt or unreadable file is surfaced rather than overwritten. This
+	// closes the common sequential collision; concurrent Saves still race, the
+	// same TOCTOU the single-host FileStore already carries.
+	switch existing, loadErr := Load(p); {
+	case loadErr == nil:
+		if existing.Owner != d.Owner || existing.Title != d.Title {
+			return fmt.Errorf("%w: %q (owner %q) collides with the stored %q (owner %q)", ErrTitleConflict, d.Title, d.Owner, existing.Title, existing.Owner)
+		}
+	case !errors.Is(loadErr, fs.ErrNotExist):
+		return loadErr
 	}
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return fmt.Errorf("pondera: creating owner directory: %w", err)
