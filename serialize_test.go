@@ -72,6 +72,48 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	}
 }
 
+// TestSaveLoadAnchorForms locks in the round-trip of the precision-sensitive
+// anchor forms through the real Save→Load path. Every fixed anchor elsewhere in
+// the suite is a small integer (0/40/80/100), so nothing exercises the fixed
+// anchor's textual encoding: Anchor.String uses FormatFloat(v, 'g', -1, 64), and
+// the -1 (shortest round-trippable) precision is load-bearing. Swapping it for a
+// fixed precision to prettify files would silently truncate a high-precision or
+// negative fixed anchor, and no existing test would catch it. Each case must
+// survive Save→Load byte-for-value identical, including a range mixing a keyword
+// anchor with a fixed one.
+func TestSaveLoadAnchorForms(t *testing.T) {
+	tests := []struct {
+		name string
+		rng  Range
+	}{
+		{name: "fixed negative window", rng: NewRange(FixedAnchor(-50), FixedAnchor(50))},
+		{name: "fixed negative fractional", rng: NewRange(FixedAnchor(-2.5), FixedAnchor(2.5))},
+		{name: "high-precision float hi", rng: NewRange(FixedAnchor(0), FixedAnchor(3.141592653589793))},
+		{name: "irrational both ends", rng: NewRange(FixedAnchor(1.0/3.0), FixedAnchor(2.0/3.0))},
+		{name: "keyword min with fixed hi", rng: NewRange(MinAnchor(), FixedAnchor(80))},
+		{name: "fixed lo with keyword max", rng: NewRange(FixedAnchor(0), MaxAnchor())},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			orig := Decision{
+				Title:    "anchor round-trip",
+				Criteria: []Criterion{{Name: "a", Weight: 1, Direction: Benefit, Range: tt.rng}},
+			}
+			path := filepath.Join(t.TempDir(), "d.toml")
+			if err := Save(path, orig); err != nil {
+				t.Fatalf("Save: %v", err)
+			}
+			got, err := Load(path)
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if !reflect.DeepEqual(got.Criteria, orig.Criteria) {
+				t.Errorf("range %s did not round-trip:\n got=%+v\nwant=%+v", tt.rng, got.Criteria, orig.Criteria)
+			}
+		})
+	}
+}
+
 func TestMarshalIsStableAndReadable(t *testing.T) {
 	d := sampleDecision()
 	data, err := Marshal(d)
