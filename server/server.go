@@ -30,6 +30,14 @@ func OwnerFromHeader(name string) OwnerFunc {
 	}
 }
 
+// maxBodyBytes caps the JSON a create/update request may send. A decision file
+// is small (a handful of criteria and options — the bundled examples are well
+// under a kilobyte), so 1 MiB is generous headroom while bounding an abusive or
+// runaway body. It matters most in public demo mode (OwnerFromPublicID), where
+// the body is attacker-controlled and an unbounded read would let one visitor
+// exhaust memory for everyone sharing the keyspace.
+const maxBodyBytes = 1 << 20
+
 // publicIDHeader carries the per-browser identity pondera's public demo mode
 // mints. The SPA sets it (see the webui package) from crypto.randomUUID(); the
 // server side that trusts it is OwnerFromPublicID below.
@@ -197,9 +205,9 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	d, err := decodeDecision(r)
+	d, err := decodeDecision(w, r)
 	if err != nil {
-		http.Error(w, "invalid decision body", http.StatusBadRequest)
+		writeDecodeError(w, err)
 		return
 	}
 	if d.Title == "" {
@@ -258,9 +266,9 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "loading decision", http.StatusInternalServerError)
 		return
 	}
-	d, err := decodeDecision(r)
+	d, err := decodeDecision(w, r)
 	if err != nil {
-		http.Error(w, "invalid decision body", http.StatusBadRequest)
+		writeDecodeError(w, err)
 		return
 	}
 	// Identity comes from the authenticated owner and the path, never the body:
@@ -319,14 +327,32 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 // "criteria" key would otherwise decode to an absent field, and Save would wipe
 // the stored value, silently losing the decider's data. Failing loudly with a 400
 // keeps the stored decision intact.
-func decodeDecision(r *http.Request) (pondera.Decision, error) {
+func decodeDecision(w http.ResponseWriter, r *http.Request) (pondera.Decision, error) {
 	var d pondera.Decision
+	// Cap the body before reading a byte of it: MaxBytesReader makes Decode fail
+	// with an *http.MaxBytesError once the limit is crossed, instead of streaming
+	// an unbounded payload into memory. writeDecodeError tells that failure apart
+	// from a plain malformed body.
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&d); err != nil {
 		return pondera.Decision{}, err
 	}
 	return d, nil
+}
+
+// writeDecodeError maps a decodeDecision failure to a status: a body that
+// overruns maxBodyBytes is a 413 (the client sent too much), anything else — a
+// malformed or unknown-field payload — is a 400. Keeping the two apart lets the
+// caller see a size rejection rather than a generic parse error.
+func writeDecodeError(w http.ResponseWriter, err error) {
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		http.Error(w, "decision body too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+	http.Error(w, "invalid decision body", http.StatusBadRequest)
 }
 
 // writeJSON encodes v as the JSON response body. An encoding failure is logged

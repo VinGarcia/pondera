@@ -794,6 +794,38 @@ func TestRejectsUnknownFields(t *testing.T) {
 	}
 }
 
+// TestRejectsOversizedBody proves create and update cap the request body: a
+// payload larger than the handler's limit is a 413 (not read into memory in
+// full), and the oversized POST persists nothing. The body is otherwise
+// well-formed JSON, so the rejection is the size, not a parse error — the guard
+// matters most in public demo mode, where the body is attacker-controlled.
+func TestRejectsOversizedBody(t *testing.T) {
+	store := pondera.NewFileStore(t.TempDir())
+	h := server.New(store, server.OwnerFromHeader("X-Pondera-Owner"))
+
+	// A title padded past the 1 MiB cap. The surrounding JSON is valid, so only the
+	// size can trip the guard.
+	huge := strings.Repeat("x", 2<<20)
+	oversized := `{"title":"` + huge + `","owner":"alice","criteria":[{"name":"safety","weight":1}]}`
+
+	if r := post(h, "/decisions", "alice", oversized); r.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("POST oversized body: status %d, want 413; body %q", r.Code, r.Body.String())
+	}
+	if titles, _ := store.List(context.Background(), "alice"); len(titles) != 0 {
+		t.Fatalf("alice owns %v after a rejected oversized POST, want none", titles)
+	}
+
+	// PUT over a seeded decision must reject an oversized replacement the same way,
+	// leaving the stored decision intact.
+	seed(t, store, "alice", "buy-car")
+	if r := put(h, "/decisions/buy-car", "alice", oversized); r.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("PUT oversized body: status %d, want 413; body %q", r.Code, r.Body.String())
+	}
+	if _, err := store.Load(context.Background(), "alice", "buy-car"); err != nil {
+		t.Fatalf("loading after rejected oversized update: %v", err)
+	}
+}
+
 // TestUpdateRejectsTitleConflict covers the rename-collision breadcrumb the store
 // left in ErrTitleConflict: a PUT whose path title slugs onto a *different* stored
 // decision ("lunch!" resolves to the file "Lunch" already occupies) must not
