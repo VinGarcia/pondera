@@ -14,6 +14,7 @@
 //	pond add-option   [flags] <file>   add an alternative (post-lock)
 //	pond score        [flags] <file>   score one option on one criterion
 //	pond rank                 <file>   compute and print the ranking
+//	pond explain              <file>   print the ranking with its per-criterion breakdown
 //	pond show                 <file>   print the decision's current state
 package main
 
@@ -57,6 +58,8 @@ func run(args []string, out io.Writer) error {
 		return cmdScore(rest)
 	case "rank":
 		return cmdRank(rest, out)
+	case "explain":
+		return cmdExplain(rest, out)
 	case "show":
 		return cmdShow(rest, out)
 	case "serve":
@@ -81,6 +84,7 @@ Commands:
   add-option    --name N <file>                        add an alternative (post-lock)
   score         --option O --criterion C --value V <file>
   rank          <file>                                 print the ranking
+  explain       <file>                                 print the ranking with its per-criterion breakdown
   show          <file>                                 print current state
   serve         [--addr :8080] [--dir .] [--owner local]  serve the web UI + API
 
@@ -258,6 +262,41 @@ func cmdRank(args []string, out io.Writer) error {
 	}
 	for i, r := range results {
 		fmt.Fprintf(out, "  %d. %-*s  %6.2f\n", i+1, width, r.Option, r.Score)
+	}
+	return nil
+}
+
+// cmdExplain is rank with each option's per-criterion detail shown: the
+// normalized value, weight, and contribution behind every score.
+func cmdExplain(args []string, out io.Writer) error {
+	fs := flag.NewFlagSet("explain", flag.ContinueOnError)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	path, err := filePath(fs)
+	if err != nil {
+		return err
+	}
+	d, err := pondera.Load(path)
+	if err != nil {
+		return err
+	}
+	breakdowns, err := d.Explain()
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "Explanation for %q:\n", d.Title)
+	width := 0
+	for _, b := range breakdowns {
+		if len(b.Option) > width {
+			width = len(b.Option)
+		}
+	}
+	for i, b := range breakdowns {
+		fmt.Fprintf(out, "  %d. %-*s  %6.2f\n", i+1, width, b.Option, b.Score)
+		for _, c := range b.Criteria {
+			fmt.Fprintf(out, "       %s: normalized %6.2f, weight %g, contribution %6.2f\n", c.Criterion, c.Normalized, c.Weight, c.Contribution)
+		}
 	}
 	return nil
 }
