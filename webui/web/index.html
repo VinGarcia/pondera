@@ -132,6 +132,20 @@
       margin-right: 0.6rem; border-radius: 0.4rem; background: var(--track); overflow: hidden;
     }
     .bar > span { display: block; height: 100%; border-radius: 0.4rem; background: var(--accent); }
+    /* Stacked variant: the same track, but one segment per criterion laid side by
+       side (flex:none so each keeps its contribution width). Only the outer corners
+       round, so the row reads as a single bar split into parts. */
+    .bar.stacked { display: flex; }
+    .bar.stacked > span { border-radius: 0; flex: none; }
+    .bar.stacked > span:first-child { border-radius: 0.4rem 0 0 0.4rem; }
+    .bar.stacked > span:last-child { border-radius: 0 0.4rem 0.4rem 0; }
+    /* A rank row that opens its breakdown on click — mirrors legend.toggle's affordance. */
+    tr.expandable { cursor: pointer; }
+    .chev-rank { color: var(--muted); font-size: 0.75rem; margin-right: 0.35rem; }
+    /* Per-criterion hint lines under the stacked bar: a small swatch, then the name
+       and the numbers that make up the segment. */
+    .seg-hint { display: flex; align-items: center; gap: 0.4rem; font-size: 0.78rem; color: var(--muted); margin: 0.2rem 0; }
+    .seg-swatch { width: 0.7rem; height: 0.7rem; border-radius: 0.2rem; flex: none; }
 
     /* Decision form */
     fieldset {
@@ -256,12 +270,31 @@
         <table v-else-if="ranking.length">
           <thead><tr><th>#</th><th>Option</th><th class="score">Score</th></tr></thead>
           <tbody>
-            <tr v-for="(r, i) in ranking" :key="r.option">
-              <td class="rankno">{{ i + 1 }}</td><td>{{ r.option }}</td>
-              <td class="score">
-                <span class="bar"><span :style="{ width: r.score + '%' }"></span></span>{{ r.score.toFixed(2) }}
-              </td>
-            </tr>
+            <template v-for="(r, i) in ranking" :key="r.option">
+              <tr class="expandable" @click="toggleBreakdown(r.option)">
+                <td class="rankno">{{ i + 1 }}</td>
+                <td><span class="chev-rank">{{ expanded[r.option] ? '▾' : '▸' }}</span>{{ r.option }}</td>
+                <td class="score">
+                  <span class="bar"><span :style="{ width: r.score + '%' }"></span></span>{{ r.score.toFixed(2) }}
+                </td>
+              </tr>
+              <!-- Breakdown row, gated on BOTH the toggle and the cache: v-if (not
+                   v-show) because breakdowns[r.option] may not have arrived yet. -->
+              <tr v-if="expanded[r.option] && breakdowns[r.option]">
+                <td></td>
+                <td colspan="2">
+                  <span class="bar stacked">
+                    <span v-for="(cb, ci) in breakdowns[r.option].criteria" :key="ci"
+                          :style="{ width: (r.score > 0 ? cb.contribution / r.score * 100 : 0) + '%', background: segmentColor(cb.criterion) }"
+                          :title="cb.criterion + ': ' + cb.contribution.toFixed(2) + ' of ' + r.score.toFixed(2)"></span>
+                  </span>
+                  <div v-for="(cb, ci) in breakdowns[r.option].criteria" :key="ci" class="seg-hint">
+                    <span class="seg-swatch" :style="{ background: segmentColor(cb.criterion) }"></span>
+                    <span><strong>{{ cb.criterion }}</strong> — normalized {{ cb.normalized.toFixed(1) }}, weight {{ cb.weight.toFixed(0) }}%, contributes {{ cb.contribution.toFixed(2) }}</span>
+                  </div>
+                </td>
+              </tr>
+            </template>
           </tbody>
         </table>
         <p v-else class="hint">The ranking appears here as soon as the decision below is complete.</p>
@@ -483,6 +516,12 @@
           decisions: [], loadError: '',
           view: 'list', title: '', draft: blankDraft(),
           ranking: [], rankError: '',
+          // Per-criterion breakdown from /explain, lazily fetched on first expand.
+          // Both are keyed by option NAME (not index) — the defensive idiom matching
+          // o.scores — so a reorder of the ranking can't misattribute a cached row.
+          // breakdowns caches the OptionBreakdown objects; expanded tracks which rows
+          // are open. Reset wherever ranking is (open, confirmCreate, draft watcher).
+          breakdowns: {}, expanded: {},
           // created flips after the first successful POST: from then on auto-save
           // PUTs. loading suppresses the auto-save watcher while a decision is
           // being (re)loaded programmatically, so opening never triggers a save.
@@ -519,6 +558,12 @@
           deep: true,
           handler() {
             if (this.view === 'decision' && !this.loading) this.scheduleSave();
+            // Any edit invalidates every cached breakdown: the next refreshRank
+            // recomputes scores, so an open row must drop its stale /explain numbers
+            // rather than show contributions from before the slider moved. Collapsing
+            // the rows too (expanded reset) avoids a visible flash of an empty bar
+            // while the re-fetch is in flight.
+            this.breakdowns = {}; this.expanded = {};
           },
         },
       },
@@ -624,6 +669,7 @@
           this.view = 'decision'; this.title = title; this.created = true;
           this.critsCollapsed = true;
           this.ranking = []; this.rankError = ''; this.saveError = ''; this.saveState = 'saved';
+          this.breakdowns = {}; this.expanded = {}; // no breakdown leaks across decisions
           if (!fromHash) location.hash = encodeURIComponent(title);
           // A network failure (offline, DNS, CORS) rejects the fetch promise instead
           // of resolving with a bad status.
@@ -674,6 +720,35 @@
             this.ranking = [];
           }
         },
+        // toggleBreakdown opens/closes an option's per-criterion detail, fetching
+        // /explain lazily on the first open (NOT in refreshRank, which runs on every
+        // edit — fetching every option's breakdown on every keystroke would be waste).
+        // The error path mirrors refreshRank: rankError already owns rank-failure
+        // display, so a bad response just leaves the row un-cached and returns.
+        async toggleBreakdown(option) {
+          this.expanded[option] = !this.expanded[option];
+          if (!this.expanded[option] || this.breakdowns[option]) return;
+          const epoch = this.epoch;
+          try {
+            const res = await apiFetch('decisions/' + encodeURIComponent(this.title) + '/explain');
+            if (epoch !== this.epoch) return; // page moved on; drop the stale breakdown
+            if (!res.ok) return; // rankError already covers error display
+            const items = await res.json();
+            // /explain returns an array keyed by score order, each item's `criteria`
+            // ALREADY in the decision's criterion order — so, unlike o.scores (keyed
+            // by criterion NAME and remapped on load), no index remap is needed here.
+            for (const b of items) this.breakdowns[b.option] = b;
+          } catch (e) { /* rankError owns rank-failure display; leave row un-cached */ }
+        },
+        // segmentColor cycles a fixed 5-color palette by the criterion's index in
+        // draft.criteria, so a criterion keeps one color across every option's bar.
+        // More than 5 criteria repeat colors (acceptable: the title and hint lines
+        // disambiguate) — a no-build SPA carries no palette library.
+        segmentColor(name) {
+          const palette = ['#3478f6', '#2f9e5e', '#e0a13b', '#9b5de5', '#d0463b'];
+          const idx = this.draft.criteria.findIndex((c) => c.name === name);
+          return palette[((idx < 0 ? 0 : idx) % palette.length)];
+        },
         startCreate() {
           this.newTitle = ''; this.dialogError = ''; this.showTitleDialog = true;
           this.$nextTick(() => { const el = this.$refs.titleInput; if (el) el.focus(); });
@@ -692,6 +767,7 @@
           this.critsCollapsed = false;
           this.draft = blankDraft();
           this.ranking = []; this.rankError = ''; this.saveError = '';
+          this.breakdowns = {}; this.expanded = {}; // no breakdown leaks across decisions
           this.saveState = 'blocked'; this.blockReason = this.validate();
           location.hash = encodeURIComponent(t);
           this.$nextTick(() => { this.loading = false; });

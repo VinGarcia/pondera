@@ -77,4 +77,14 @@ func TestExportedAssetsAreEmbedded(t *testing.T) {
 	if !strings.Contains(string(webui.Index), "randomUUID") {
 		t.Fatal("SPA shell is missing the randomUUID public-id generator")
 	}
+	// The expandable per-criterion breakdown must consume the /explain endpoint;
+	// without that path in the shell the stacked bar could never be populated.
+	if !strings.Contains(string(webui.Index), "/explain") {
+		t.Fatal("SPA shell is missing the /explain breakdown fetch")
+	}
+	// toggleBreakdown is the lazy-fetch entry point wiring the rank row to /explain;
+	// losing it would ship the markup with no way to open a breakdown.
+	if !strings.Contains(string(webui.Index), "toggleBreakdown") {
+		t.Fatal("SPA shell is missing the toggleBreakdown handler")
+	}
 }
