@@ -253,6 +253,107 @@ func TestRankEndpoint(t *testing.T) {
 	}
 }
 
+// TestExplainEndpoint is the D-2 API contract mirroring TestRankEndpoint: GET
+// /decisions/{title}/explain returns the owner's decision scored by the
+// engine, carrying the per-criterion breakdown behind every option's score —
+// the detail /rank's bare Result drops. Loading, owner-scoping, and every
+// error status (404 missing/not-owned, 400 unusable title, 401 no owner, 422
+// unscorable) are identical to rank because both routes share Explain as the
+// single scoring path.
+func TestExplainEndpoint(t *testing.T) {
+	store := pondera.NewFileStore(t.TempDir())
+	h := server.New(store, server.OwnerFromHeader("X-Pondera-Owner"))
+
+	// Same rankable fixture as TestRankEndpoint: safety outweighs price, so the
+	// safer-but-pricier option wins and its breakdown must show safety
+	// contributing more than price.
+	rankable := pondera.Decision{
+		Title: "buy-car",
+		Owner: "alice",
+		Criteria: []pondera.Criterion{
+			{Name: "safety", Weight: 3},
+			{Name: "price", Weight: 1, Direction: pondera.Cost},
+		},
+		Options: []pondera.Option{
+			{Name: "cheap", Scores: map[string]float64{"safety": 40, "price": 20}},
+			{Name: "safe", Scores: map[string]float64{"safety": 90, "price": 80}},
+		},
+	}
+	if err := store.Save(context.Background(), rankable); err != nil {
+		t.Fatalf("seeding rankable decision: %v", err)
+	}
+
+	rec := get(h, "/decisions/buy-car/explain", "alice")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET explain as alice: status %d, want 200; body %q", rec.Code, rec.Body.String())
+	}
+	var breakdowns []pondera.OptionBreakdown
+	if err := json.Unmarshal(rec.Body.Bytes(), &breakdowns); err != nil {
+		t.Fatalf("decoding explain body %q: %v", rec.Body.String(), err)
+	}
+	if len(breakdowns) != 2 {
+		t.Fatalf("explain returned %d options, want 2", len(breakdowns))
+	}
+	if breakdowns[0].Option != "safe" {
+		t.Fatalf("top-explained option = %q, want safe (weighted engine, not input order)", breakdowns[0].Option)
+	}
+	if !(breakdowns[0].Score > breakdowns[1].Score) {
+		t.Fatalf("breakdowns not ordered: %v", breakdowns)
+	}
+	if len(breakdowns[0].Criteria) != 2 {
+		t.Fatalf("top option has %d criterion breakdowns, want 2", len(breakdowns[0].Criteria))
+	}
+	// safety (weight 3) must outweigh price (weight 1) in the winning option's
+	// own breakdown — proving the JSON body carries the real per-criterion detail,
+	// not a flat or repeated placeholder.
+	var safetyContribution, priceContribution float64
+	for _, c := range breakdowns[0].Criteria {
+		switch c.Criterion {
+		case "safety":
+			safetyContribution = c.Contribution
+		case "price":
+			priceContribution = c.Contribution
+		}
+	}
+	if !(safetyContribution > priceContribution) {
+		t.Fatalf("safe option's safety contribution (%v) not greater than its price contribution (%v)", safetyContribution, priceContribution)
+	}
+
+	// Owner-scoping: bob cannot explain alice's decision even knowing the title.
+	if r := get(h, "/decisions/buy-car/explain", "bob"); r.Code != http.StatusNotFound {
+		t.Fatalf("explain alice's decision as bob: status %d, want 404", r.Code)
+	}
+
+	// A missing title is a 404, same as rank.
+	if r := get(h, "/decisions/nope/explain", "alice"); r.Code != http.StatusNotFound {
+		t.Fatalf("explain missing decision: status %d, want 404", r.Code)
+	}
+
+	// No injected owner: rejected, never served globally.
+	if r := get(h, "/decisions/buy-car/explain", ""); r.Code != http.StatusUnauthorized {
+		t.Fatalf("explain with no owner: status %d, want 401", r.Code)
+	}
+
+	// A decision that exists but is not scorable — an option missing a score —
+	// is a 422 carrying the engine's reason, same as rank.
+	unrankable := pondera.Decision{
+		Title:    "half-built",
+		Owner:    "alice",
+		Criteria: []pondera.Criterion{{Name: "safety", Weight: 1}, {Name: "price", Weight: 1}},
+		Options:  []pondera.Option{{Name: "a", Scores: map[string]float64{"safety": 80}}},
+	}
+	if err := store.Save(context.Background(), unrankable); err != nil {
+		t.Fatalf("seeding unrankable decision: %v", err)
+	}
+	r := get(h, "/decisions/half-built/explain", "alice")
+	if r.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("explain unrankable decision: status %d, want 422; body %q", r.Code, r.Body.String())
+	}
+	if !strings.Contains(r.Body.String(), "price") {
+		t.Fatalf("422 body %q does not name the missing criterion the decider must fix", r.Body.String())
+	}
+}
+
 // bodyFor renders a JSON POST body for a decision, letting the test set the
 // owner field to something OTHER than the authenticated caller — the whole
 // point is proving the server ignores it.
@@ -554,10 +655,10 @@ func TestDeleteEndpoint(t *testing.T) {
 // that is non-empty but has no filename-safe characters (only punctuation). The
 // store returns ErrInvalidTitle, which is the caller's mistake — it must surface
 // as a 400 on every endpoint, never a 500 leaking an internal slug error. create
-// asserts this in TestCreateRejectsUnusableTitle; get, rank, update, and delete
-// are covered here so the whole surface answers consistently. get and rank
-// previously fell through to a 500 on this input, which this test locks the fix
-// for.
+// asserts this in TestCreateRejectsUnusableTitle; get, rank, explain, update, and
+// delete are covered here so the whole surface answers consistently. get and
+// rank previously fell through to a 500 on this input, which this test locks the
+// fix for.
 func TestUnusableTitleIsClientError(t *testing.T) {
 	store := pondera.NewFileStore(t.TempDir())
 	h := server.New(store, server.OwnerFromHeader("X-Pondera-Owner"))
@@ -568,6 +669,7 @@ func TestUnusableTitleIsClientError(t *testing.T) {
 	}{
 		{name: "GET", rec: get(h, "/decisions/!!!", "alice")},
 		{name: "rank", rec: get(h, "/decisions/!!!/rank", "alice")},
+		{name: "explain", rec: get(h, "/decisions/!!!/explain", "alice")},
 		{name: "PUT", rec: put(h, "/decisions/!!!", "alice", bodyFor("!!!", "alice"))},
 		{name: "DELETE", rec: del(h, "/decisions/!!!", "alice")},
 	} {
@@ -616,6 +718,13 @@ func TestHandlerMapsStoreFailuresTo500(t *testing.T) {
 				return pondera.Decision{}, boom
 			}},
 			call: func(h http.Handler) *httptest.ResponseRecorder { return get(h, "/decisions/buy-car/rank", "alice") },
+		},
+		{
+			name: "explain load fails",
+			store: stubStore{loadFn: func(ctx context.Context, owner string, title string) (pondera.Decision, error) {
+				return pondera.Decision{}, boom
+			}},
+			call: func(h http.Handler) *httptest.ResponseRecorder { return get(h, "/decisions/buy-car/explain", "alice") },
 		},
 		{
 			name: "create existence check fails",

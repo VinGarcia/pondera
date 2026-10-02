@@ -99,6 +99,7 @@ func New(store pondera.Store, ownerFn OwnerFunc) *Handler {
 	mux.HandleFunc("PUT /decisions/{title}", h.update)
 	mux.HandleFunc("DELETE /decisions/{title}", h.delete)
 	mux.HandleFunc("GET /decisions/{title}/rank", h.rank)
+	mux.HandleFunc("GET /decisions/{title}/explain", h.explain)
 	h.mux = mux
 	return h
 }
@@ -135,28 +136,41 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, titles)
 }
 
-// get serves GET /decisions/{title}: one decision owned by the injected owner.
-// A title the owner does not own is a 404 — the same answer whether the
-// decision is missing or belongs to someone else, so the endpoint never
-// confirms another owner's decision exists. A title with no filename-safe
-// characters is the caller's mistake, so it is a 400, not a 500 leaking an
-// internal slug error — the same mapping create/update/delete use.
-func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
+// loadForOwner resolves the injected owner and loads the {title} decision for
+// the read handlers (get, rank, explain), reporting whether the caller should
+// proceed. Keeping the owner-scoping and load-error mapping in one place is what
+// makes the whole read surface answer identically: a title the owner does not
+// own is a 404 — the same answer whether the decision is missing or belongs to
+// someone else, so the endpoint never confirms another owner's decision exists;
+// a title with no filename-safe characters is the caller's mistake, so a 400,
+// not a 500 leaking an internal slug error; anything else is a 500. A new
+// Store.Load error added later can only be mapped here, never inconsistently
+// across the three handlers.
+func (h *Handler) loadForOwner(w http.ResponseWriter, r *http.Request) (pondera.Decision, bool) {
 	owner, ok := h.owner(w, r)
 	if !ok {
-		return
+		return pondera.Decision{}, false
 	}
 	d, err := h.store.Load(r.Context(), owner, r.PathValue("title"))
 	if errors.Is(err, pondera.ErrNotFound) {
 		http.Error(w, "decision not found", http.StatusNotFound)
-		return
+		return pondera.Decision{}, false
 	}
 	if errors.Is(err, pondera.ErrInvalidTitle) {
 		http.Error(w, "decision title has no usable characters", http.StatusBadRequest)
-		return
+		return pondera.Decision{}, false
 	}
 	if err != nil {
 		http.Error(w, "loading decision", http.StatusInternalServerError)
+		return pondera.Decision{}, false
+	}
+	return d, true
+}
+
+// get serves GET /decisions/{title}: one decision owned by the injected owner.
+func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
+	d, ok := h.loadForOwner(w, r)
+	if !ok {
 		return
 	}
 	writeJSON(w, d)
@@ -165,26 +179,12 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 // rank serves GET /decisions/{title}/rank: the injected owner's decision ranked
 // most- to least-desirable by the engine, so the SPA renders the ranking from
 // the single source of truth instead of re-implementing the weighted sum. A
-// title the owner does not own is a 404 (same as get), and a title with no
-// filename-safe characters is a 400 (also same as get). A decision that loads but
-// cannot be ranked yet — an option missing a score, no criteria, a bad weight —
-// is a 422 carrying the engine's reason, a user-fixable state, not a 500.
+// decision that loads but cannot be ranked yet — an option missing a score, no
+// criteria, a bad weight — is a 422 carrying the engine's reason, a user-fixable
+// state, not a 500.
 func (h *Handler) rank(w http.ResponseWriter, r *http.Request) {
-	owner, ok := h.owner(w, r)
+	d, ok := h.loadForOwner(w, r)
 	if !ok {
-		return
-	}
-	d, err := h.store.Load(r.Context(), owner, r.PathValue("title"))
-	if errors.Is(err, pondera.ErrNotFound) {
-		http.Error(w, "decision not found", http.StatusNotFound)
-		return
-	}
-	if errors.Is(err, pondera.ErrInvalidTitle) {
-		http.Error(w, "decision title has no usable characters", http.StatusBadRequest)
-		return
-	}
-	if err != nil {
-		http.Error(w, "loading decision", http.StatusInternalServerError)
 		return
 	}
 	results, err := d.Rank()
@@ -193,6 +193,25 @@ func (h *Handler) rank(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, results)
+}
+
+// explain serves GET /decisions/{title}/explain: like rank, but the body carries
+// the per-criterion breakdown behind every option's score — the detail rank's
+// score-only Result drops. Explain is the single scoring path and Rank its
+// projection, so explain and rank can only ever differ in body shape, never in
+// whether a decision scores (hence the shared 422). The SPA renders it as a
+// per-criterion stacked bar instead of re-deriving the breakdown itself.
+func (h *Handler) explain(w http.ResponseWriter, r *http.Request) {
+	d, ok := h.loadForOwner(w, r)
+	if !ok {
+		return
+	}
+	breakdowns, err := d.Explain()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		return
+	}
+	writeJSON(w, breakdowns)
 }
 
 // create serves POST /decisions: it saves the decision in the request body

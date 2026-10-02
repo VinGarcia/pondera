@@ -116,6 +116,7 @@ func TestArgErrors(t *testing.T) {
 		{"set-weight", "--name", "x", file}, // missing --weight
 		{"score", "--option", "A", "--criterion", "x", file},       // missing --value
 		{"rank", "missing.toml"},                                   // load nonexistent file
+		{"explain", "missing.toml"},                                // load nonexistent file
 		{"add-criterion", "--name", "z", "--range", "0,avg", file}, // unknown range keyword
 	}
 	for _, args := range cases {
@@ -154,6 +155,7 @@ func TestExtraFileArgRejected(t *testing.T) {
 		{"lock", file, extra},
 		{"show", file, extra},
 		{"rank", file, extra},
+		{"explain", file, extra},
 		{"add-option", "--name", "O", file, extra},
 	}
 	for _, args := range cases {
@@ -173,6 +175,7 @@ func TestMissingFileArgRejected(t *testing.T) {
 		{"add-option", "--name", "O"},
 		{"score", "--option", "O", "--criterion", "x", "--value", "1"},
 		{"rank"},
+		{"explain"},
 		{"show"},
 	}
 	var sink bytes.Buffer
@@ -215,7 +218,7 @@ func TestMutationsRejectMissingFile(t *testing.T) {
 // (flag.ContinueOnError surfaces the parse error) rather than ignoring it.
 func TestUnknownFlagRejected(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "x.toml")
-	commands := []string{"new", "add-criterion", "set-weight", "lock", "add-option", "score", "rank", "show"}
+	commands := []string{"new", "add-criterion", "set-weight", "lock", "add-option", "score", "rank", "explain", "show"}
 	var sink bytes.Buffer
 	for _, cmd := range commands {
 		args := []string{cmd, "--nonsense", file}
@@ -225,9 +228,12 @@ func TestUnknownFlagRejected(t *testing.T) {
 	}
 }
 
-// TestRankErrors proves rank refuses to print a ranking from an ill-formed sheet:
-// a decision with no criteria (which would divide by a zero total weight) and a
-// locked decision with an option that has not been fully scored.
+// TestRankErrors proves rank and explain refuse to print a result from an
+// ill-formed sheet: a decision with no criteria (which would divide by a zero
+// total weight) and a locked decision with an option that has not been fully
+// scored. explain is checked alongside rank because Explain is the single
+// scoring path rank's Rank() delegates to — the two commands must fail
+// identically, never one silently succeeding where the other errors.
 func TestRankErrors(t *testing.T) {
 	dir := t.TempDir()
 	var sink bytes.Buffer
@@ -237,6 +243,9 @@ func TestRankErrors(t *testing.T) {
 	if err := run([]string{"rank", empty}, &sink); err == nil {
 		t.Error("rank on a decision with no criteria should error, got nil")
 	}
+	if err := run([]string{"explain", empty}, &sink); err == nil {
+		t.Error("explain on a decision with no criteria should error, got nil")
+	}
 
 	partial := filepath.Join(dir, "partial.toml")
 	mustRun(t, &sink, "new", "--title", "Partial", partial)
@@ -245,6 +254,53 @@ func TestRankErrors(t *testing.T) {
 	mustRun(t, &sink, "add-option", "--name", "O", partial)
 	if err := run([]string{"rank", partial}, &sink); err == nil {
 		t.Error("rank with an unscored option should error, got nil")
+	}
+	if err := run([]string{"explain", partial}, &sink); err == nil {
+		t.Error("explain with an unscored option should error, got nil")
+	}
+}
+
+// TestExplainOutputs extends TestFullFlow's fixture to the explain command: the
+// same scored decision must print each option's overall score AND the
+// per-criterion detail behind it (normalized value, weight, contribution),
+// proving cmdExplain wires Explain() rather than re-deriving or dropping the
+// breakdown rank's bare score discards.
+func TestExplainOutputs(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "car.toml")
+	var sink bytes.Buffer
+
+	mustRun(t, &sink, "new", "--title", "New car", file)
+	mustRun(t, &sink, "add-criterion", "--name", "safety", "--weight", "3", file)
+	mustRun(t, &sink, "add-criterion", "--name", "price", "--weight", "2", "--cost", "--range", "min,max", file)
+	mustRun(t, &sink, "lock", file)
+	mustRun(t, &sink, "add-option", "--name", "A", file)
+	mustRun(t, &sink, "add-option", "--name", "B", file)
+	mustRun(t, &sink, "score", "--option", "A", "--criterion", "safety", "--value", "90", file)
+	mustRun(t, &sink, "score", "--option", "A", "--criterion", "price", "--value", "40000", file)
+	mustRun(t, &sink, "score", "--option", "B", "--criterion", "safety", "--value", "70", file)
+	mustRun(t, &sink, "score", "--option", "B", "--criterion", "price", "--value", "20000", file)
+
+	// Same weighted result as TestFullFlow: B (82) beats A (54). Price is a cost
+	// criterion over range min,max {20000,40000}: B's cheaper 20000 normalizes to
+	// the min, and cost direction flips the min to the top contribution (100.00,
+	// weighted 40.00); A's pricier 40000 normalizes to the max, which cost flips to
+	// 0 — the per-criterion detail /rank's bare score drops.
+	var out bytes.Buffer
+	mustRun(t, &out, "explain", file)
+	got := out.String()
+	wantLines := []string{
+		`Explanation for "New car":`,
+		"1. B   82.00",
+		"safety: normalized  70.00, weight 3, contribution  42.00",
+		"price: normalized 100.00, weight 2, contribution  40.00",
+		"2. A   54.00",
+		"safety: normalized  90.00, weight 3, contribution  54.00",
+		"price: normalized   0.00, weight 2, contribution   0.00",
+	}
+	for _, w := range wantLines {
+		if !strings.Contains(got, w) {
+			t.Errorf("explain output missing %q\ngot:\n%s", w, got)
+		}
 	}
 }
 
