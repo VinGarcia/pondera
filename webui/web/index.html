@@ -25,12 +25,17 @@
       --track: #eef0f4;
       --danger: #d0463b;
       --good: #2f9e5e;
+      /* Stacked-bar segment palette: reuse the theme tokens so segments track
+         light/dark like every other .bar, plus two extras for criteria 4 and 5. */
+      --seg-amber: #e0a13b;
+      --seg-violet: #9b5de5;
     }
     @media (prefers-color-scheme: dark) {
       :root {
         --bg: #14171c; --card: #1c2027; --ink: #e7ebf0; --muted: #9aa4b0;
         --line: #2c313a; --accent: #5b8dff; --accent-soft: #26344f;
         --track: #262b33; --danger: #e26257; --good: #4fbf7f;
+        --seg-amber: #e0b05a; --seg-violet: #b17ff0;
       }
     }
     * { box-sizing: border-box; }
@@ -522,6 +527,12 @@
           // breakdowns caches the OptionBreakdown objects; expanded tracks which rows
           // are open. Reset wherever ranking is (open, confirmCreate, draft watcher).
           breakdowns: {}, expanded: {},
+          // breakdownEpoch invalidates in-flight /explain fetches when the draft is
+          // edited (bumped in the draft watcher): an explain response that lands after
+          // a slider moved would otherwise re-cache pre-edit contributions. Kept
+          // distinct from `epoch` (navigation only) because save()'s epoch comparison
+          // must not see extra bumps.
+          breakdownEpoch: 0,
           // created flips after the first successful POST: from then on auto-save
           // PUTs. loading suppresses the auto-save watcher while a decision is
           // being (re)loaded programmatically, so opening never triggers a save.
@@ -563,7 +574,7 @@
             // rather than show contributions from before the slider moved. Collapsing
             // the rows too (expanded reset) avoids a visible flash of an empty bar
             // while the re-fetch is in flight.
-            this.breakdowns = {}; this.expanded = {};
+            this.breakdowns = {}; this.expanded = {}; this.breakdownEpoch++;
           },
         },
       },
@@ -723,29 +734,41 @@
         // toggleBreakdown opens/closes an option's per-criterion detail, fetching
         // /explain lazily on the first open (NOT in refreshRank, which runs on every
         // edit — fetching every option's breakdown on every keystroke would be waste).
-        // The error path mirrors refreshRank: rankError already owns rank-failure
-        // display, so a bad response just leaves the row un-cached and returns.
+        // /explain is a separate endpoint from /rank, so a failure here must surface
+        // its own error (refreshRank's success already cleared rankError) and re-collapse
+        // the row rather than leave an open chevron over nothing. Two staleness guards:
+        // `epoch` drops a response after navigation, `breakdownEpoch` drops one after an
+        // edit invalidated the cache mid-flight.
         async toggleBreakdown(option) {
           this.expanded[option] = !this.expanded[option];
           if (!this.expanded[option] || this.breakdowns[option]) return;
-          const epoch = this.epoch;
+          const navEpoch = this.epoch;
+          const bEpoch = this.breakdownEpoch;
+          const stale = () => navEpoch !== this.epoch || bEpoch !== this.breakdownEpoch;
           try {
             const res = await apiFetch('decisions/' + encodeURIComponent(this.title) + '/explain');
-            if (epoch !== this.epoch) return; // page moved on; drop the stale breakdown
-            if (!res.ok) return; // rankError already covers error display
+            if (stale()) return; // navigation or edit landed first; drop this response
+            if (!res.ok) { this.rankError = 'Could not load breakdown: HTTP ' + res.status; this.expanded[option] = false; return; }
             const items = await res.json();
+            if (stale()) return; // re-check after the second await
             // /explain returns an array keyed by score order, each item's `criteria`
             // ALREADY in the decision's criterion order — so, unlike o.scores (keyed
             // by criterion NAME and remapped on load), no index remap is needed here.
             for (const b of items) this.breakdowns[b.option] = b;
-          } catch (e) { /* rankError owns rank-failure display; leave row un-cached */ }
+          } catch (e) {
+            if (stale()) return;
+            this.rankError = 'Could not load breakdown: ' + e.message;
+            this.expanded[option] = false;
+          }
         },
-        // segmentColor cycles a fixed 5-color palette by the criterion's index in
-        // draft.criteria, so a criterion keeps one color across every option's bar.
-        // More than 5 criteria repeat colors (acceptable: the title and hint lines
-        // disambiguate) — a no-build SPA carries no palette library.
+        // segmentColor maps a criterion to one color (by its index in draft.criteria),
+        // so a criterion keeps that color across every option's bar. Colors are theme
+        // tokens (reused --accent/--good/--danger plus two segment extras) so segments
+        // track light/dark like every other .bar. More than 5 criteria repeat colors
+        // (acceptable: the title and hint lines disambiguate) — a no-build SPA carries
+        // no palette library.
         segmentColor(name) {
-          const palette = ['#3478f6', '#2f9e5e', '#e0a13b', '#9b5de5', '#d0463b'];
+          const palette = ['var(--accent)', 'var(--good)', 'var(--seg-amber)', 'var(--seg-violet)', 'var(--danger)'];
           const idx = this.draft.criteria.findIndex((c) => c.name === name);
           return palette[((idx < 0 ? 0 : idx) % palette.length)];
         },
