@@ -544,7 +544,17 @@
         // what's already open, so setting the hash from open() below can't loop
         // back into another fetch.
         async syncFromHash() {
-          let raw = decodeURIComponent(location.hash.replace(/^#/, ''));
+          let raw;
+          try {
+            raw = decodeURIComponent(location.hash.replace(/^#/, ''));
+          } catch (e) {
+            // A malformed hash (e.g. a stray "%") throws synchronously here; left
+            // unhandled it rejects this async function with nothing to catch it —
+            // the hashchange listener below calls it fire-and-forget. Fall back to
+            // the list view instead of an unhandled rejection.
+            this.view = 'list';
+            return;
+          }
           if (raw === 'edit') { this.view = 'list'; this.startCreate(); return; }
           // Legacy "edit:<title>" deep-links land on the unified page — unless a
           // decision is literally titled "edit:<...>", which takes precedence.
@@ -615,29 +625,36 @@
           this.critsCollapsed = true;
           this.ranking = []; this.rankError = ''; this.saveError = ''; this.saveState = 'saved';
           if (!fromHash) location.hash = encodeURIComponent(title);
-          const res = await apiFetch('decisions/' + encodeURIComponent(title));
-          if (!res.ok) {
-            this.rankError = 'Could not load decision: HTTP ' + res.status;
+          // A network failure (offline, DNS, CORS) rejects the fetch promise instead
+          // of resolving with a bad status; without this try/catch that rejection was
+          // unhandled and left `loading` stuck true forever, freezing auto-save.
+          try {
+            const res = await apiFetch('decisions/' + encodeURIComponent(title));
+            if (!res.ok) {
+              this.rankError = 'Could not load decision: HTTP ' + res.status;
+              return;
+            }
+            const d = await res.json();
+            this.draft = {
+              criteria: (d.criteria || []).map((c) => ({
+                name: c.name, weight: c.weight, direction: c.direction,
+                range: Array.isArray(c.range) ? c.range.slice() : [0, 100],
+              })),
+              options: (d.options || []).map((o) => ({
+                name: o.name,
+                scores: (d.criteria || []).reduce((acc, c, ci) => { acc[ci] = (o.scores || {})[c.name]; return acc; }, {}),
+              })),
+            };
+            // Stored weights are raw (any positive numbers); rescale them to shares
+            // summing to 100 so the page speaks percentages. Rank normalizes by the
+            // weight total anyway, so this preserves the decision's ranking.
+            this.normalizeWeights();
+            await this.refreshRank();
+          } catch (e) {
+            this.rankError = 'Could not load decision: ' + e.message;
+          } finally {
             this.$nextTick(() => { this.loading = false; });
-            return;
           }
-          const d = await res.json();
-          this.draft = {
-            criteria: (d.criteria || []).map((c) => ({
-              name: c.name, weight: c.weight, direction: c.direction,
-              range: Array.isArray(c.range) ? c.range.slice() : [0, 100],
-            })),
-            options: (d.options || []).map((o) => ({
-              name: o.name,
-              scores: (d.criteria || []).reduce((acc, c, ci) => { acc[ci] = (o.scores || {})[c.name]; return acc; }, {}),
-            })),
-          };
-          // Stored weights are raw (any positive numbers); rescale them to shares
-          // summing to 100 so the page speaks percentages. Rank normalizes by the
-          // weight total anyway, so this preserves the decision's ranking.
-          this.normalizeWeights();
-          await this.refreshRank();
-          this.$nextTick(() => { this.loading = false; });
         },
         async refreshRank() {
           const epoch = this.epoch;
@@ -895,6 +912,13 @@
             this.created = true;
             this.saveState = 'saved';
             await this.refreshRank();
+          } catch (e) {
+            // A rejected fetch (offline, DNS, CORS) skips the res.ok check above;
+            // without this catch the chip was left stuck on "saving…" forever with
+            // no error shown and no retry, silently losing the edit.
+            if (epoch !== this.epoch) return;
+            this.saveState = 'error';
+            this.saveError = 'Could not save: ' + e.message;
           } finally {
             this.saving = false;
             // A change arrived mid-flight: run the save it asked for, unless the
