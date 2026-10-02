@@ -626,8 +626,7 @@
           this.ranking = []; this.rankError = ''; this.saveError = ''; this.saveState = 'saved';
           if (!fromHash) location.hash = encodeURIComponent(title);
           // A network failure (offline, DNS, CORS) rejects the fetch promise instead
-          // of resolving with a bad status; without this try/catch that rejection was
-          // unhandled and left `loading` stuck true forever, freezing auto-save.
+          // of resolving with a bad status.
           try {
             const res = await apiFetch('decisions/' + encodeURIComponent(title));
             if (!res.ok) {
@@ -658,12 +657,22 @@
         },
         async refreshRank() {
           const epoch = this.epoch;
-          const res = await apiFetch('decisions/' + encodeURIComponent(this.title) + '/rank');
-          if (epoch !== this.epoch) return; // page moved on; drop the stale ranking
-          if (res.status === 422) { this.rankError = await res.text(); this.ranking = []; return; }
-          if (!res.ok) { this.rankError = 'HTTP ' + res.status; this.ranking = []; return; }
-          this.ranking = await res.json();
-          this.rankError = '';
+          // A network failure (offline, DNS, CORS) rejects the fetch promise instead
+          // of resolving with a bad status; catching it here (rather than in a
+          // caller) keeps the rank-failure message attributed to ranking, not to
+          // whatever operation triggered the refresh (e.g. open() loading the decision).
+          try {
+            const res = await apiFetch('decisions/' + encodeURIComponent(this.title) + '/rank');
+            if (epoch !== this.epoch) return; // page moved on; drop the stale ranking
+            if (res.status === 422) { this.rankError = await res.text(); this.ranking = []; return; }
+            if (!res.ok) { this.rankError = 'HTTP ' + res.status; this.ranking = []; return; }
+            this.ranking = await res.json();
+            this.rankError = '';
+          } catch (e) {
+            if (epoch !== this.epoch) return;
+            this.rankError = 'Could not rank: ' + e.message;
+            this.ranking = [];
+          }
         },
         startCreate() {
           this.newTitle = ''; this.dialogError = ''; this.showTitleDialog = true;
@@ -913,9 +922,7 @@
             this.saveState = 'saved';
             await this.refreshRank();
           } catch (e) {
-            // A rejected fetch (offline, DNS, CORS) skips the res.ok check above;
-            // without this catch the chip was left stuck on "saving…" forever with
-            // no error shown and no retry, silently losing the edit.
+            // A rejected fetch (offline, DNS, CORS) skips the res.ok check above.
             if (epoch !== this.epoch) return;
             this.saveState = 'error';
             this.saveError = 'Could not save: ' + e.message;
