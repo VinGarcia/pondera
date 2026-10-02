@@ -268,12 +268,61 @@ type Result struct {
 	Score  float64 `json:"score"`
 }
 
+// CriterionBreakdown explains how one criterion shaped an option's score: the
+// criterion's weight, the 0-100 Normalized value (direction already applied,
+// so a Cost is shown as desirability, not raw value), and the Contribution that
+// value made to the final score. Contribution is the weight-normalized share
+// (Normalized * Weight / sum of weights), so an OptionBreakdown's per-criterion
+// Contributions sum to its Score — the property a later explainability UI shows
+// as a stacked bar.
+type CriterionBreakdown struct {
+	Criterion    string  `json:"criterion"`
+	Weight       float64 `json:"weight"`
+	Normalized   float64 `json:"normalized"`
+	Contribution float64 `json:"contribution"`
+}
+
+// OptionBreakdown is one ranked option's final Score alongside the per-criterion
+// detail that explains it, in the decision's criterion order.
+type OptionBreakdown struct {
+	Option   string               `json:"option"`
+	Score    float64              `json:"score"`
+	Criteria []CriterionBreakdown `json:"criteria"`
+}
+
 // Rank computes each option's desirability and returns the options ordered from
 // most to least desirable (stable on ties). It errors on an empty criteria set,
 // a weight that is not positive and finite, an invalid or non-finite range, a
 // non-finite option score, or an option missing a score for any criterion — the
 // engine never silently treats a missing value as zero.
 func (d Decision) Rank() ([]Result, error) {
+	// Rank is the score-only projection of Explain; both go through the single
+	// scoring path in rank() so the ranking math lives in exactly one place.
+	breakdowns, err := d.rank()
+	if err != nil {
+		return nil, err
+	}
+	results := make([]Result, len(breakdowns))
+	for i, b := range breakdowns {
+		results[i] = Result{Option: b.Option, Score: b.Score}
+	}
+	return results, nil
+}
+
+// Explain computes the same ranking as Rank but keeps the per-criterion
+// breakdown that produced each score, ordered most to least desirable (stable
+// on ties). It is the exported entry point for explainability: a caller reads
+// each option's Score together with how every criterion contributed to it.
+func (d Decision) Explain() ([]OptionBreakdown, error) {
+	return d.rank()
+}
+
+// rank is the single scoring path shared by Rank and Explain: it validates the
+// decision, scores every option into its full per-criterion breakdown, and
+// orders the options by Score. Keeping the math here (rather than duplicating
+// the formula in each exported method) means a change to the scoring rule is
+// made in exactly one place.
+func (d Decision) rank() ([]OptionBreakdown, error) {
 	if len(d.Criteria) == 0 {
 		return nil, fmt.Errorf("pondera: decision %q has no criteria", d.Title)
 	}
@@ -300,7 +349,7 @@ func (d Decision) Rank() ([]Result, error) {
 		return nil, err
 	}
 
-	results := make([]Result, 0, len(d.Options))
+	breakdowns := make([]OptionBreakdown, 0, len(d.Options))
 	seenOptions := make(map[string]bool, len(d.Options))
 	for _, o := range d.Options {
 		// Two options with the same name are ambiguous: both would appear in the
@@ -313,6 +362,7 @@ func (d Decision) Rank() ([]Result, error) {
 		}
 		seenOptions[o.Name] = true
 		var acc float64
+		crit := make([]CriterionBreakdown, 0, len(d.Criteria))
 		for _, c := range d.Criteria {
 			v, ok := o.Scores[c.Name]
 			if !ok {
@@ -321,15 +371,23 @@ func (d Decision) Rank() ([]Result, error) {
 			if !finite(v) {
 				return nil, fmt.Errorf("pondera: option %q has non-finite score %g for criterion %q; must be finite", o.Name, v, c.Name)
 			}
-			acc += contribution(c, v, bounds[c.Name]) * c.Weight
+			norm := contribution(c, v, bounds[c.Name])
+			weighted := norm * c.Weight
+			acc += weighted
+			crit = append(crit, CriterionBreakdown{
+				Criterion:    c.Name,
+				Weight:       c.Weight,
+				Normalized:   norm,
+				Contribution: weighted / totalWeight,
+			})
 		}
-		results = append(results, Result{Option: o.Name, Score: acc / totalWeight})
+		breakdowns = append(breakdowns, OptionBreakdown{Option: o.Name, Score: acc / totalWeight, Criteria: crit})
 	}
 
-	sort.SliceStable(results, func(i, j int) bool {
-		return results[i].Score > results[j].Score
+	sort.SliceStable(breakdowns, func(i, j int) bool {
+		return breakdowns[i].Score > breakdowns[j].Score
 	})
-	return results, nil
+	return breakdowns, nil
 }
 
 // span holds the min and max raw value of a criterion across options.

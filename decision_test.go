@@ -219,6 +219,196 @@ func TestRank(t *testing.T) {
 	}
 }
 
+// TestExplain checks the per-criterion breakdown Explain exposes: the ordering
+// matches Rank, each criterion carries its weight and direction-applied
+// normalized value, and the contributions sum to the final score. The score
+// expectations mirror the TestRank cases so the two entry points cannot drift.
+func TestExplain(t *testing.T) {
+	tests := []struct {
+		name     string
+		decision Decision
+		want     []OptionBreakdown // in expected order
+	}{
+		{
+			// Two benefit criteria with different weights: each contribution is the
+			// normalized value times its share of the total weight (80*3/4.5 and
+			// 60*1.5/4.5), and the two sum to the 73.33 index.
+			name: "weighted benefit splits into per-criterion shares",
+			decision: Decision{
+				Criteria: []Criterion{
+					{Name: "seguranca", Weight: 3},
+					{Name: "preco", Weight: 1.5},
+				},
+				Options: []Option{
+					{Name: "A", Scores: map[string]float64{"seguranca": 80, "preco": 60}},
+				},
+			},
+			want: []OptionBreakdown{
+				{
+					Option: "A",
+					Score:  330.0 / 4.5,
+					Criteria: []CriterionBreakdown{
+						{Criterion: "seguranca", Weight: 3, Normalized: 80, Contribution: 80 * 3 / 4.5},
+						{Criterion: "preco", Weight: 1.5, Normalized: 60, Contribution: 60 * 1.5 / 4.5},
+					},
+				},
+			},
+		},
+		{
+			// Direction is applied before the breakdown is reported: the Cost
+			// criterion's Normalized is the inverted desirability (100-90=10,
+			// 100-20=80), not the raw value. Winner sorts first.
+			name: "cost direction reflected in normalized value",
+			decision: Decision{
+				Criteria: []Criterion{
+					{Name: "conforto", Weight: 2},
+					{Name: "preco", Weight: 1, Direction: Cost},
+				},
+				Options: []Option{
+					{Name: "caro", Scores: map[string]float64{"conforto": 80, "preco": 90}},
+					{Name: "barato", Scores: map[string]float64{"conforto": 70, "preco": 20}},
+				},
+			},
+			want: []OptionBreakdown{
+				{
+					Option: "barato",
+					Score:  (70*2 + 80) / 3.0,
+					Criteria: []CriterionBreakdown{
+						{Criterion: "conforto", Weight: 2, Normalized: 70, Contribution: 70 * 2 / 3.0},
+						{Criterion: "preco", Weight: 1, Normalized: 80, Contribution: 80 * 1 / 3.0},
+					},
+				},
+				{
+					Option: "caro",
+					Score:  (80*2 + 10) / 3.0,
+					Criteria: []CriterionBreakdown{
+						{Criterion: "conforto", Weight: 2, Normalized: 80, Contribution: 80 * 2 / 3.0},
+						{Criterion: "preco", Weight: 1, Normalized: 10, Contribution: 10 * 1 / 3.0},
+					},
+				},
+			},
+		},
+		{
+			// Mixed percent + min-max criteria, two options: confirms the breakdown
+			// rows follow the decision's criterion order even after options are
+			// reordered by score.
+			name: "mixed criteria keep criterion order",
+			decision: Decision{
+				Criteria: []Criterion{
+					{Name: "conforto", Weight: 2},
+					{Name: "preco", Weight: 1, Direction: Cost, Range: NewRange(MinAnchor(), MaxAnchor())},
+				},
+				Options: []Option{
+					{Name: "confortavel-caro", Scores: map[string]float64{"conforto": 40, "preco": 200000}},
+					{Name: "bom-barato", Scores: map[string]float64{"conforto": 60, "preco": 100000}},
+				},
+			},
+			want: []OptionBreakdown{
+				{
+					Option: "bom-barato",
+					Score:  (60*2 + 100) / 3.0,
+					Criteria: []CriterionBreakdown{
+						{Criterion: "conforto", Weight: 2, Normalized: 60, Contribution: 60 * 2 / 3.0},
+						{Criterion: "preco", Weight: 1, Normalized: 100, Contribution: 100 * 1 / 3.0},
+					},
+				},
+				{
+					Option: "confortavel-caro",
+					Score:  (40*2 + 0) / 3.0,
+					Criteria: []CriterionBreakdown{
+						{Criterion: "conforto", Weight: 2, Normalized: 40, Contribution: 40 * 2 / 3.0},
+						{Criterion: "preco", Weight: 1, Normalized: 0, Contribution: 0},
+					},
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := tt.decision.Explain()
+			if err != nil {
+				t.Fatalf("Explain() unexpected error: %v", err)
+			}
+			if len(got) != len(tt.want) {
+				t.Fatalf("Explain() returned %d options, want %d: %+v", len(got), len(tt.want), got)
+			}
+			for i := range got {
+				wantOpt := tt.want[i]
+				gotOpt := got[i]
+				if gotOpt.Option != wantOpt.Option {
+					t.Errorf("option[%d].Option = %q, want %q (full: %+v)", i, gotOpt.Option, wantOpt.Option, got)
+				}
+				if math.Abs(gotOpt.Score-wantOpt.Score) > eps {
+					t.Errorf("option[%d] (%s).Score = %v, want %v", i, gotOpt.Option, gotOpt.Score, wantOpt.Score)
+				}
+				if len(gotOpt.Criteria) != len(wantOpt.Criteria) {
+					t.Fatalf("option[%d] (%s) has %d criteria, want %d: %+v", i, gotOpt.Option, len(gotOpt.Criteria), len(wantOpt.Criteria), gotOpt.Criteria)
+				}
+				var sum float64
+				for j := range gotOpt.Criteria {
+					gc := gotOpt.Criteria[j]
+					wc := wantOpt.Criteria[j]
+					if gc.Criterion != wc.Criterion {
+						t.Errorf("option[%d].Criteria[%d].Criterion = %q, want %q", i, j, gc.Criterion, wc.Criterion)
+					}
+					if gc.Weight != wc.Weight {
+						t.Errorf("option[%d] (%s).Criteria[%d].Weight = %v, want %v", i, gotOpt.Option, j, gc.Weight, wc.Weight)
+					}
+					if math.Abs(gc.Normalized-wc.Normalized) > eps {
+						t.Errorf("option[%d] (%s).Criteria[%d].Normalized = %v, want %v", i, gotOpt.Option, j, gc.Normalized, wc.Normalized)
+					}
+					if math.Abs(gc.Contribution-wc.Contribution) > eps {
+						t.Errorf("option[%d] (%s).Criteria[%d].Contribution = %v, want %v", i, gotOpt.Option, j, gc.Contribution, wc.Contribution)
+					}
+					sum += gc.Contribution
+				}
+				// The headline explainability guarantee: the per-criterion
+				// contributions reconstruct the final score exactly (within float
+				// tolerance), so a UI can render them as parts of a whole.
+				if math.Abs(sum-gotOpt.Score) > eps {
+					t.Errorf("option[%d] (%s) contributions sum to %v, want Score %v", i, gotOpt.Option, sum, gotOpt.Score)
+				}
+			}
+		})
+	}
+}
+
+// TestExplainMatchesRank guards the single-source-of-truth refactor: Explain and
+// Rank must return the same options in the same order with the same scores, so
+// the score-only projection can never drift from the detailed breakdown.
+func TestExplainMatchesRank(t *testing.T) {
+	d := Decision{
+		Criteria: []Criterion{
+			{Name: "conforto", Weight: 2},
+			{Name: "preco", Weight: 1, Direction: Cost, Range: NewRange(MinAnchor(), MaxAnchor())},
+		},
+		Options: []Option{
+			{Name: "confortavel-caro", Scores: map[string]float64{"conforto": 40, "preco": 200000}},
+			{Name: "bom-barato", Scores: map[string]float64{"conforto": 60, "preco": 100000}},
+		},
+	}
+	ranked, err := d.Rank()
+	if err != nil {
+		t.Fatalf("Rank() unexpected error: %v", err)
+	}
+	explained, err := d.Explain()
+	if err != nil {
+		t.Fatalf("Explain() unexpected error: %v", err)
+	}
+	if len(ranked) != len(explained) {
+		t.Fatalf("Rank() returned %d results, Explain() returned %d", len(ranked), len(explained))
+	}
+	for i := range ranked {
+		if ranked[i].Option != explained[i].Option {
+			t.Errorf("result[%d].Option: Rank %q, Explain %q", i, ranked[i].Option, explained[i].Option)
+		}
+		if math.Abs(ranked[i].Score-explained[i].Score) > eps {
+			t.Errorf("result[%d] (%s).Score: Rank %v, Explain %v", i, ranked[i].Option, ranked[i].Score, explained[i].Score)
+		}
+	}
+}
+
 func TestRankErrors(t *testing.T) {
 	tests := []struct {
 		name     string
