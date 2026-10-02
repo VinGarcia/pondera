@@ -273,8 +273,8 @@ type Result struct {
 // so a Cost is shown as desirability, not raw value), and the Contribution that
 // value made to the final score. Contribution is the weight-normalized share
 // (Normalized * Weight / sum of weights), so an OptionBreakdown's per-criterion
-// Contributions sum to its Score — the property a later explainability UI shows
-// as a stacked bar.
+// Contributions sum to its Score (up to float rounding, not bit-exact) — the
+// property a later explainability UI shows as a stacked bar.
 type CriterionBreakdown struct {
 	Criterion    string  `json:"criterion"`
 	Weight       float64 `json:"weight"`
@@ -291,14 +291,12 @@ type OptionBreakdown struct {
 }
 
 // Rank computes each option's desirability and returns the options ordered from
-// most to least desirable (stable on ties). It errors on an empty criteria set,
-// a weight that is not positive and finite, an invalid or non-finite range, a
-// non-finite option score, or an option missing a score for any criterion — the
-// engine never silently treats a missing value as zero.
+// most to least desirable (stable on ties). It is Explain without the
+// per-criterion breakdown, and surfaces the same validation errors.
 func (d Decision) Rank() ([]Result, error) {
-	// Rank is the score-only projection of Explain; both go through the single
-	// scoring path in rank() so the ranking math lives in exactly one place.
-	breakdowns, err := d.rank()
+	// Rank is the score-only projection of Explain, so the ranking math lives in
+	// exactly one place (Explain) and Rank just drops the per-criterion detail.
+	breakdowns, err := d.Explain()
 	if err != nil {
 		return nil, err
 	}
@@ -309,20 +307,15 @@ func (d Decision) Rank() ([]Result, error) {
 	return results, nil
 }
 
-// Explain computes the same ranking as Rank but keeps the per-criterion
-// breakdown that produced each score, ordered most to least desirable (stable
-// on ties). It is the exported entry point for explainability: a caller reads
-// each option's Score together with how every criterion contributed to it.
+// Explain computes each option's desirability, keeping the per-criterion
+// breakdown that produced every score, and returns the options ordered from
+// most to least desirable (stable on ties). It is the single scoring path and
+// the exported entry point for explainability; Rank is its score-only
+// projection. It errors on an empty criteria set, a weight that is not positive
+// and finite, an invalid or non-finite range, a non-finite option score, or an
+// option missing a score for any criterion — the engine never silently treats a
+// missing value as zero.
 func (d Decision) Explain() ([]OptionBreakdown, error) {
-	return d.rank()
-}
-
-// rank is the single scoring path shared by Rank and Explain: it validates the
-// decision, scores every option into its full per-criterion breakdown, and
-// orders the options by Score. Keeping the math here (rather than duplicating
-// the formula in each exported method) means a change to the scoring rule is
-// made in exactly one place.
-func (d Decision) rank() ([]OptionBreakdown, error) {
 	if len(d.Criteria) == 0 {
 		return nil, fmt.Errorf("pondera: decision %q has no criteria", d.Title)
 	}
