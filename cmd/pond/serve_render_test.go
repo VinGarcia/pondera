@@ -3,7 +3,6 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
-	"os/exec"
 	"strings"
 	"sync"
 	"testing"
@@ -21,26 +20,10 @@ import (
 // browser is imported into it).
 func chromeDumpDOM(t *testing.T, url string) string {
 	t.Helper()
-	var bin string
-	for _, c := range []string{"google-chrome-stable", "google-chrome", "chromium", "chromium-browser"} {
-		if p, err := exec.LookPath(c); err == nil {
-			bin = p
-			break
-		}
-	}
-	if bin == "" {
-		t.Skip("no Chrome/Chromium in PATH; skipping browser render check")
-	}
 	// --virtual-time-budget lets the SPA's onMounted fetch resolve and Vue
-	// re-render before the DOM is captured; --dump-dom prints the live DOM.
-	// --no-sandbox is required when the test runs as root in a container.
-	cmd := exec.Command(bin, "--headless", "--no-sandbox", "--disable-gpu",
-		"--virtual-time-budget=5000", "--dump-dom", url)
-	out, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("chrome --dump-dom %s: %v", url, err)
-	}
-	return string(out)
+	// re-render before the DOM is captured. Browser discovery, the base flags, and
+	// the --dump-dom run are shared with the explain driver via runChromeDOM.
+	return runChromeDOM(t, url, "--virtual-time-budget=5000")
 }
 
 // TestServeHandlerRendersInBrowser closes the render debt runs #150–154 left
