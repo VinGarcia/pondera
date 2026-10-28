@@ -139,6 +139,7 @@ pond lock          <file>                                    freeze criteria & w
 pond add-option    --name N <file>                           add an alternative (post-lock)
 pond score         --option O --criterion C --value V <file>
 pond rank          <file>                                    print the ranking
+pond explain       <file>                                    print the ranking with its per-criterion breakdown
 pond show          <file>                                    print current state
 pond serve         [--addr :8080] [--dir .] [--owner local]  serve the web UI + API
 ```
