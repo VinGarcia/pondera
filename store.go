@@ -34,9 +34,52 @@ var ErrInvalidTitle = errors.New("pondera: title has no filename-safe characters
 // is an update, not a conflict.
 var ErrTitleConflict = errors.New("pondera: a different decision already occupies this title")
 
+// UnreadableDecision names one stored decision List found but could not read.
+// Name is the backend's own identifier for it (the FileStore uses the file name,
+// e.g. "garbage.toml", never the absolute path) and Reason is a short
+// description that is safe to show a client. Err is the full underlying error,
+// which may carry server-side detail such as on-disk paths, so it is meant for
+// logs, not responses.
+type UnreadableDecision struct {
+	Name   string
+	Reason string
+	Err    error
+}
+
+// UnreadableError is returned by List alongside the titles it could read when
+// one or more of the owner's stored decisions could not be read. A malformed
+// decision must not hide the owner's readable ones, nor disappear silently
+// itself, so List reports both: a caller that only checks err != nil still
+// fails loudly, while one that wants a partial view recovers it with errors.As
+// and serves the titles while surfacing Files.
+type UnreadableError struct {
+	Files []UnreadableDecision
+}
+
+func (e *UnreadableError) Error() string {
+	names := make([]string, len(e.Files))
+	for i, f := range e.Files {
+		names[i] = f.Name
+	}
+	return fmt.Sprintf("pondera: %d unreadable decision(s): %s", len(e.Files), strings.Join(names, ", "))
+}
+
+// Unwrap exposes each file's underlying error so errors.Is can still match,
+// for instance, fs.ErrPermission through the aggregate.
+func (e *UnreadableError) Unwrap() []error {
+	errs := make([]error, len(e.Files))
+	for i, f := range e.Files {
+		errs[i] = f.Err
+	}
+	return errs
+}
+
 // A Store persists decisions scoped by owner. Save and Load address a decision
 // by its (Owner, Title) identity; List returns the titles a single owner owns,
-// never leaking another owner's decisions. The interface keeps the persistence
+// never leaking another owner's decisions. When some of the owner's decisions
+// cannot be read, List returns the readable titles together with an
+// *UnreadableError naming the rest; any other error means the listing itself
+// failed and the titles are nil. The interface keeps the persistence
 // medium open — a filesystem today, a database behind a server tomorrow —
 // without the callers changing.
 //
@@ -190,7 +233,10 @@ func (s *FileStore) Delete(ctx context.Context, owner, title string) error {
 // List returns the titles of the decisions owned by owner, sorted by nothing in
 // particular (callers sort as they need). An unknown owner lists as empty with
 // no error. Each title is read from the file itself, so it reflects the real
-// stored Title, not a lossy slug of the filename.
+// stored Title, not a lossy slug of the filename. A decision file that fails to
+// read or parse does not abort the listing: List keeps going and returns the
+// readable titles with an *UnreadableError naming every file it skipped. A
+// failure to read the owner directory itself is still a plain error.
 func (s *FileStore) List(ctx context.Context, owner string) ([]string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -211,15 +257,34 @@ func (s *FileStore) List(ctx context.Context, owner string) ([]string, error) {
 		return nil, fmt.Errorf("pondera: listing %s: %w", dir, err)
 	}
 	titles := []string{}
+	var unreadable []UnreadableDecision
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".toml") {
 			continue
 		}
 		d, err := Load(filepath.Join(dir, e.Name()))
 		if err != nil {
-			return nil, err
+			unreadable = append(unreadable, UnreadableDecision{Name: e.Name(), Reason: unreadableReason(err), Err: err})
+			continue
 		}
 		titles = append(titles, d.Title)
 	}
+	if len(unreadable) > 0 {
+		return titles, &UnreadableError{Files: unreadable}
+	}
 	return titles, nil
+}
+
+// unreadableReason shortens a Load error into a client-safe reason. A read
+// failure is wrapped around an *fs.PathError whose message embeds the absolute
+// path, so only its operation and cause are kept ("open: permission denied"). A
+// decode failure carries no path (Unmarshal never sees one), so its message is
+// kept as is: it points at the offending TOML line, which is what someone fixing
+// the file needs.
+func unreadableReason(err error) string {
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) {
+		return pathErr.Op + ": " + pathErr.Err.Error()
+	}
+	return err.Error()
 }

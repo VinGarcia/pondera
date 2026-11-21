@@ -3,6 +3,8 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -255,5 +257,54 @@ func TestServeHandlerRendersDemoModeInBrowser(t *testing.T) {
 	mu.Unlock()
 	if !server.IsPublicID(got) {
 		t.Fatalf("public backend received X-Pondera-Public-Id %q, want a canonical RFC-4122 UUID", got)
+	}
+}
+
+// TestServeHandlerRendersUnreadableNoticeInBrowser proves the list view keeps
+// working when one stored decision is malformed: the readable decision still
+// renders, and a notice names the unreadable file instead of the whole list
+// failing (the pre-Fatia-B 500) or the file vanishing silently.
+func TestServeHandlerRendersUnreadableNoticeInBrowser(t *testing.T) {
+	root := t.TempDir()
+	store := pondera.NewFileStore(root)
+	seedRankable(t, store, "local", "buy-car")
+	// "local" slugs to "local", so the owner directory is root/local.
+	if err := os.WriteFile(filepath.Join(root, "local", "garbage.toml"), []byte("title = = broken"), 0o644); err != nil {
+		t.Fatalf("seed corrupt decision: %v", err)
+	}
+	srv := httptest.NewServer(serveHandler(store, "local"))
+	defer srv.Close()
+
+	dom := chromeDumpDOM(t, srv.URL+"/")
+
+	if !strings.Contains(dom, "buy-car") {
+		t.Fatalf("rendered DOM missing the readable decision:\n%s", dom)
+	}
+	if !strings.Contains(dom, "1 unreadable decision file(s): garbage.toml") {
+		t.Fatalf("rendered DOM missing the unreadable-file notice:\n%s", dom)
+	}
+}
+
+// TestSPAListAcceptsBareArrayInBrowser covers hosts that reuse the embedded SPA
+// over their own GET /decisions instead of pondera's server package (one such
+// host answers with the plain titles array and ignores ?include=unreadable). The
+// list view must still render those titles rather than break on the array.
+func TestSPAListAcceptsBareArrayInBrowser(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /decisions", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`["host-decision"]`))
+	})
+	mux.Handle("/", webui.Handler())
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	dom := chromeDumpDOM(t, srv.URL+"/")
+
+	if !strings.Contains(dom, "host-decision") {
+		t.Fatalf("rendered DOM missing the title served as a bare array:\n%s", dom)
+	}
+	if strings.Contains(dom, "unreadable decision file") {
+		t.Fatalf("bare-array list rendered an unreadable notice:\n%s", dom)
 	}
 }
