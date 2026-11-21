@@ -382,6 +382,12 @@
     <!-- List view: pick a decision, or start a new one (title dialog first). -->
     <template v-else>
       <div class="toolbar"><button class="primary" @click="startCreate">+ New decision</button></div>
+      <!-- Stored files the server could not read are named, never hidden: the
+           readable decisions still list below, and the hover shows each reason. -->
+      <p v-if="unreadable.length" class="muted unreadable" role="status"
+         :title="unreadable.map(u => u.file + ': ' + u.reason).join('\n')">
+        {{ unreadable.length }} unreadable decision file(s): {{ unreadable.map(u => u.file).join(', ') }}
+      </p>
       <p v-if="loadError" class="error">{{ loadError }}</p>
       <p v-else-if="!decisions.length" class="muted">No decisions yet.</p>
       <ul class="decisions" v-else>
@@ -518,7 +524,7 @@
           // Resolved on boot from what the host injected; drives the account
           // button and the demo banner.
           mode: window.PONDERA_MODE,
-          decisions: [], loadError: '',
+          decisions: [], unreadable: [], loadError: '',
           view: 'list', title: '', draft: blankDraft(),
           ranking: [], rankError: '',
           // Per-criterion breakdown from /explain, lazily fetched on first expand.
@@ -631,9 +637,15 @@
         },
         async reload() {
           try {
-            const res = await apiFetch('decisions');
+            // include=unreadable asks for the object shape, which also names the
+            // stored files the server could not read. A bare array is still
+            // accepted: hosts that reuse this SPA over their own GET /decisions
+            // (not pondera's server package) answer with the plain titles array.
+            const res = await apiFetch('decisions?include=unreadable');
             if (!res.ok) throw new Error('HTTP ' + res.status);
-            this.decisions = await res.json();
+            const body = await res.json();
+            this.decisions = Array.isArray(body) ? body : body.titles;
+            this.unreadable = Array.isArray(body) ? [] : body.unreadable;
           } catch (e) { this.loadError = 'Could not load decisions: ' + e.message; }
         },
         // confirmDelete removes the open decision after the user confirms in the

@@ -8,8 +8,10 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"regexp"
+	"strconv"
 
 	"github.com/vingarcia/pondera"
 )
@@ -121,16 +123,47 @@ func (h *Handler) owner(w http.ResponseWriter, r *http.Request) (string, bool) {
 	return owner, true
 }
 
+// unreadableDecision is one entry of the opt-in list body's "unreadable" field:
+// the stored file pondera could not read and a short, client-safe reason.
+type unreadableDecision struct {
+	File   string `json:"file"`
+	Reason string `json:"reason"`
+}
+
+// listBody is the opt-in shape of GET /decisions?include=unreadable.
+type listBody struct {
+	Titles     []string             `json:"titles"`
+	Unreadable []unreadableDecision `json:"unreadable"`
+}
+
 // list serves GET /decisions: the titles the injected owner owns, as a JSON
-// array.
+// array. A decision the store cannot read does not fail the listing (it would
+// hide every readable decision of the owner); it is logged, counted in the
+// X-Pondera-Unreadable-Count header, and, with ?include=unreadable, the body is
+// an object {"titles": [...], "unreadable": [{"file", "reason"}]} naming each
+// one. The default array shape is kept so existing clients keep working. Any
+// other store failure is still a 500.
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	owner, ok := h.owner(w, r)
 	if !ok {
 		return
 	}
 	titles, err := h.store.List(r.Context(), owner)
-	if err != nil {
+	var unreadableErr *pondera.UnreadableError
+	if err != nil && !errors.As(err, &unreadableErr) {
 		http.Error(w, "listing decisions", http.StatusInternalServerError)
+		return
+	}
+	unreadable := []unreadableDecision{}
+	if unreadableErr != nil {
+		for _, f := range unreadableErr.Files {
+			slog.Warn("pondera: skipping unreadable decision", "owner", owner, "file", f.Name, "err", f.Err)
+			unreadable = append(unreadable, unreadableDecision{File: f.Name, Reason: f.Reason})
+		}
+		w.Header().Set("X-Pondera-Unreadable-Count", strconv.Itoa(len(unreadable)))
+	}
+	if r.URL.Query().Get("include") == "unreadable" {
+		writeJSON(w, listBody{Titles: titles, Unreadable: unreadable})
 		return
 	}
 	writeJSON(w, titles)
